@@ -1,0 +1,12 @@
+@import 'tailwindcss';
+
+@theme {
+	--color-titan-bg: #0a0a0f;
+	--color-titan-surface: #14141f;
+	--color-titan-surface-hover: #1e1e2e;
+	--color-titan-border: #2a2a3a;
+	--color-titan-accent: #e63946;
+	--color-titan-gold: #ffd700;
+	--color-titan-text: #e8e8f0;
+	--color-titan-text-muted: #8888a0;
+}
