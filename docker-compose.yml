@@ -1,0 +1,14 @@
+services:
+  titantron:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - titantron-data:/data
+    environment:
+      - TITANTRON_DB_PATH=/data/titantron.db
+      - TITANTRON_LOG_LEVEL=info
+    restart: unless-stopped
+
+volumes:
+  titantron-data:

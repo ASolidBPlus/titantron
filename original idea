@@ -1,0 +1,7 @@
+titantron - a pro wrestling-themed video organiser/player powered by Jellyfin.
+
+USAGE: You provide titantron API access to your jellyfin server. on titantron setup, you select jellyfin libraries with wrestling. these libraries each have to be a singular dedicated promotion (i.e., ROH, NJPW, WWE, AEW, CMLL, etc.). you provide the cagematch promotion id of the library. it then searches it, uses the date (either found in jellyfin api and/or filename) to a date for the promotion in cagematch, then use fuzzy-style matching for confirmation (or a more complex algo, it's probably needed).
+
+the browser is similar to cagematch. you can search promotions, wrestlers, matches, etc. you can also select an event, generate chapters (that would be stored in jellyfin). it would give you thumbnails and match it to matches. you would be able to say when a match starts by comparing to the thumbnail, and it would put that chapter on. then, you would be able to go to that moment from searching for the match itself.
+
+the player should be jellyfin-operated. this is like a jellyfin player but intended for wrestling only. it should work as a PWA on both PC's and phones.
