@@ -1,0 +1,148 @@
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import async_session, get_db
+from app.models.library import Library
+from app.models.promotion import Promotion
+from app.models.video_item import VideoItem
+from app.routers.auth import get_jellyfin_client
+from app.schemas.cagematch import ConfigureLibraryRequest, ConfiguredLibraryResponse
+from app.services.jellyfin_client import JellyfinClient
+from app.services.sync_service import sync_library, sync_status
+
+router = APIRouter()
+
+
+@router.get("/jellyfin")
+async def list_jellyfin_libraries(client: JellyfinClient = Depends(get_jellyfin_client)):
+    """List available libraries from the connected Jellyfin server."""
+    try:
+        views = await client.get_views()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch libraries: {e}")
+
+    return [{"id": v.id, "name": v.name, "collection_type": v.collection_type} for v in views]
+
+
+@router.get("", response_model=list[ConfiguredLibraryResponse])
+async def list_configured_libraries(db: AsyncSession = Depends(get_db)):
+    """List all configured library-promotion mappings."""
+    result = await db.execute(
+        select(
+            Library.id,
+            Library.jellyfin_library_id,
+            Library.name,
+            Library.promotion_id,
+            Promotion.name.label("promotion_name"),
+            Promotion.abbreviation.label("promotion_abbreviation"),
+            func.count(VideoItem.id).label("video_count"),
+            Library.last_synced,
+        )
+        .outerjoin(Promotion, Library.promotion_id == Promotion.id)
+        .outerjoin(VideoItem, VideoItem.library_id == Library.id)
+        .group_by(Library.id)
+    )
+    rows = result.all()
+
+    return [
+        ConfiguredLibraryResponse(
+            id=row.id,
+            jellyfin_library_id=row.jellyfin_library_id,
+            name=row.name,
+            promotion_id=row.promotion_id,
+            promotion_name=row.promotion_name or "Unknown",
+            promotion_abbreviation=row.promotion_abbreviation or "",
+            video_count=row.video_count,
+            last_synced=row.last_synced.isoformat() if row.last_synced else None,
+        )
+        for row in rows
+    ]
+
+
+@router.post("", response_model=ConfiguredLibraryResponse)
+async def configure_library(request: ConfigureLibraryRequest, db: AsyncSession = Depends(get_db)):
+    """Map a Jellyfin library to a Cagematch promotion."""
+    # Check if already configured
+    result = await db.execute(
+        select(Library).where(Library.jellyfin_library_id == request.jellyfin_library_id)
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Library already configured")
+
+    # Get or create promotion
+    result = await db.execute(
+        select(Promotion).where(Promotion.cagematch_id == request.cagematch_promotion_id)
+    )
+    promotion = result.scalar_one_or_none()
+    if not promotion:
+        promotion = Promotion(
+            cagematch_id=request.cagematch_promotion_id,
+            name=request.promotion_name,
+            abbreviation=request.promotion_abbreviation,
+        )
+        db.add(promotion)
+        await db.flush()
+
+    library = Library(
+        jellyfin_library_id=request.jellyfin_library_id,
+        name=request.jellyfin_library_name,
+        promotion_id=promotion.id,
+    )
+    db.add(library)
+    await db.commit()
+    await db.refresh(library)
+
+    return ConfiguredLibraryResponse(
+        id=library.id,
+        jellyfin_library_id=library.jellyfin_library_id,
+        name=library.name,
+        promotion_id=promotion.id,
+        promotion_name=promotion.name,
+        promotion_abbreviation=promotion.abbreviation or "",
+        video_count=0,
+        last_synced=None,
+    )
+
+
+@router.delete("/{library_id}")
+async def delete_library(library_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a library configuration."""
+    result = await db.execute(select(Library).where(Library.id == library_id))
+    library = result.scalar_one_or_none()
+    if not library:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    await db.delete(library)
+    await db.commit()
+    return {"success": True}
+
+
+async def _run_sync(library_id: int, client: JellyfinClient):
+    """Background task to run sync."""
+    async with async_session() as db:
+        try:
+            await sync_library(db, library_id, client)
+        except Exception:
+            pass  # Error is captured in sync_status
+
+
+@router.post("/{library_id}/sync")
+async def trigger_sync(
+    library_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    client: JellyfinClient = Depends(get_jellyfin_client),
+):
+    """Trigger a sync for a specific library."""
+    if sync_status.is_running:
+        raise HTTPException(status_code=409, detail="A sync is already in progress")
+
+    result = await db.execute(select(Library).where(Library.id == library_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    background_tasks.add_task(_run_sync, library_id, client)
+    return {"message": "Sync started"}
