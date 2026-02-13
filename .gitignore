@@ -15,6 +15,7 @@ build/
 # IDE
 .vscode/
 .idea/
+.planning/
 
 # Environment
 .env
@@ -28,3 +29,4 @@ Thumbs.db
 /data/
 backend/data/
 connection.json
+issues found
