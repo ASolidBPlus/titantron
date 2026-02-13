@@ -136,7 +136,7 @@
 	}
 
 	function handleDone() {
-		goto('/');
+		goto('/admin');
 	}
 
 	// Filter out already-configured libraries

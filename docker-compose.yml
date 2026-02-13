@@ -5,9 +5,11 @@ services:
       - "8765:8765"
     volumes:
       - titantron-data:/data
+    env_file:
+      - .env
     environment:
       - TITANTRON_DB_PATH=/data/titantron.db
-      - TITANTRON_LOG_LEVEL=info
+      - TITANTRON_FRONTEND_DIR=/app/frontend-build
     restart: unless-stopped
 
 volumes:

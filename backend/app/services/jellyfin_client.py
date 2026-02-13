@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass
 
@@ -31,6 +33,7 @@ class ItemSummary:
     duration_ticks: int | None
     media_source_id: str | None
     has_trickplay: bool
+    image_tag: str | None
 
 
 class JellyfinClient:
@@ -97,7 +100,7 @@ class JellyfinClient:
         params = {
             "ParentId": parent_id,
             "IncludeItemTypes": "Movie,Video",
-            "Fields": "Path,MediaSources,DateCreated,PremiereDate",
+            "Fields": "Path,MediaSources,DateCreated,PremiereDate,ImageTags,PrimaryImageAspectRatio",
             "Recursive": "true",
             "SortBy": "PremiereDate,SortName",
             "SortOrder": "Descending",
@@ -114,6 +117,12 @@ class JellyfinClient:
             if item.get("MediaSources"):
                 media_source_id = item["MediaSources"][0].get("Id")
             has_trickplay = bool(item.get("Trickplay"))
+            image_tag = item.get("ImageTags", {}).get("Primary")
+            # Only keep image_tag for real posters (portrait aspect ratio),
+            # not auto-generated video thumbnails (landscape)
+            aspect_ratio = item.get("PrimaryImageAspectRatio")
+            if image_tag and aspect_ratio and aspect_ratio >= 1.0:
+                image_tag = None
             items.append(
                 ItemSummary(
                     id=item["Id"],
@@ -125,6 +134,76 @@ class JellyfinClient:
                     duration_ticks=item.get("RunTimeTicks"),
                     media_source_id=media_source_id,
                     has_trickplay=has_trickplay,
+                    image_tag=image_tag,
                 )
             )
         return items, total
+
+    async def get_playback_info(self, item_id: str, media_source_id: str) -> dict:
+        """Get playback info — lets Jellyfin decide direct play vs transcode."""
+        return await self._request(
+            "POST",
+            f"/Items/{item_id}/PlaybackInfo",
+            params={
+                "UserId": self.user_id,
+                "StartTimeTicks": "0",
+                "IsPlayback": "true",
+                "AutoOpenLiveStream": "true",
+                "MediaSourceId": media_source_id,
+            },
+            json={
+                "DeviceProfile": {
+                    "DirectPlayProfiles": [
+                        {
+                            "Container": "mp4,webm",
+                            "Type": "Video",
+                            "VideoCodec": "h264,h265,hevc,vp8,vp9,av1",
+                            "AudioCodec": "aac,mp3,opus,flac,vorbis",
+                        }
+                    ],
+                    "TranscodingProfiles": [
+                        {
+                            "Container": "ts",
+                            "Type": "Video",
+                            "AudioCodec": "aac,mp3",
+                            "VideoCodec": "h264",
+                            "Context": "Streaming",
+                            "Protocol": "hls",
+                            "BreakOnNonKeyFrames": True,
+                        }
+                    ],
+                }
+            },
+        )
+
+    async def get_item_detail(self, item_id: str) -> dict:
+        """Get full item detail including Trickplay metadata."""
+        return await self._request(
+            "GET",
+            f"/Users/{self.user_id}/Items/{item_id}",
+            params={"Fields": "Trickplay,MediaSources"},
+        )
+
+    async def _request_no_body(self, method: str, path: str, json: dict | None = None) -> None:
+        """Make a request that returns no body (e.g. 204)."""
+        url = f"{self.server_url}{path}"
+        headers = {"Authorization": self._auth_header()}
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method, url, json=json, headers=headers) as resp:
+                resp.raise_for_status()
+
+    async def update_item_chapters(self, item_id: str, chapters: list[dict]) -> None:
+        """Push chapters to Jellyfin via UpdateItem (POST /Items/{itemId})."""
+        # Fetch existing item data so we only override Chapters
+        item = await self._request("GET", f"/Users/{self.user_id}/Items/{item_id}")
+        item["Chapters"] = chapters
+        await self._request_no_body("POST", f"/Items/{item_id}", json=item)
+
+    async def report_playback_start(self, body: dict) -> None:
+        await self._request_no_body("POST", "/Sessions/Playing", json=body)
+
+    async def report_playback_progress(self, body: dict) -> None:
+        await self._request_no_body("POST", "/Sessions/Playing/Progress", json=body)
+
+    async def report_playback_stopped(self, body: dict) -> None:
+        await self._request_no_body("POST", "/Sessions/Playing/Stopped", json=body)

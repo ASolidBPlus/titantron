@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import re
 from dataclasses import dataclass, field
@@ -38,6 +40,9 @@ class WrestlerRef:
     name: str
     cagematch_id: int | None = None
     is_linked: bool = False
+    side: int = 1
+    team_name: str | None = None
+    role: str = "competitor"
 
 
 @dataclass
@@ -51,6 +56,14 @@ class MatchData:
     rating: float | None = None
     votes: int | None = None
     duration: str | None = None
+
+
+@dataclass
+class EventComment:
+    username: str
+    date: date | None = None
+    rating: float | None = None
+    text: str = ""
 
 
 @dataclass
@@ -110,6 +123,29 @@ def _parse_int(text: str) -> int | None:
         return int(text.strip())
     except (ValueError, AttributeError):
         return None
+
+
+@dataclass
+class WrestlerProfile:
+    """Profile data scraped from a wrestler's Cagematch page."""
+
+    name: str
+    image_url: str | None = None
+    birth_date: date | None = None
+    birth_place: str | None = None
+    height: str | None = None
+    weight: str | None = None
+    style: str | None = None
+    debut: str | None = None
+    roles: str | None = None
+    nicknames: str | None = None
+    signature_moves: str | None = None
+    trainers: str | None = None
+    alter_egos: str | None = None
+    rating: float | None = None
+    votes: int | None = None
+    rating: float | None = None
+    votes: int | None = None
 
 
 class CagematchScraper:
@@ -353,11 +389,19 @@ class CagematchScraper:
             # Extract match type
             type_div = match_div.find("div", class_="MatchType")
             if type_div:
-                match_type = type_div.get_text(strip=True)
-                # Check for title link
+                # Check for title link first
                 title_link = type_div.find("a", href=re.compile(r"\?id=5&nr=\d+"))
                 if title_link:
                     title_name = title_link.get_text(strip=True)
+                    # Get match type text without the title name
+                    full_text = type_div.get_text(strip=True)
+                    match_type = full_text.replace(title_name, "").strip()
+                    # Clean up leftover separators
+                    match_type = re.sub(r"^[\s\-:]+|[\s\-:]+$", "", match_type)
+                    if not match_type:
+                        match_type = None
+                else:
+                    match_type = type_div.get_text(strip=True)
 
             # Extract results
             results_div = match_div.find("div", class_="MatchResults")
@@ -398,51 +442,371 @@ class CagematchScraper:
         return matches
 
     def _parse_participants(self, match_div: Tag) -> list[WrestlerRef]:
-        """Parse wrestler names from a match div.
+        """Parse wrestler names from a match div, assigning sides.
 
         Handles both linked wrestlers (<a> tags with id=2) and unlinked (plain text).
-        Ignores non-wrestler links (titles, events, etc.)
+        Uses the result text to determine which side each wrestler is on by
+        splitting on ' vs. ' and checking which half contains each name.
+        Also handles team/stable links (id=28 tag teams, id=29 stables).
         """
+        results_div = match_div.find("div", class_="MatchResults")
+        if not results_div:
+            return []
+
+        # Get the full result text and split into sides (no maxsplit — supports multi-way)
+        result_text = results_div.get_text()
+        sides_text = re.split(r"\s+vs\.?\s+", result_text)
+
         participants: list[WrestlerRef] = []
         seen_names: set[str] = set()
 
-        # Find all wrestler links within the match div
-        for link in match_div.find_all("a", href=re.compile(r"\?id=2&nr=\d+")):
+        # Collect team/stable names from links (id=28 = tag teams, id=29 = stables)
+        # Map each team name to its side number for later association with wrestlers.
+        side_team_names: dict[int, str] = {}
+        for link in results_div.find_all("a", href=re.compile(r"\?id=2[89]&nr=\d+")):
+            team_name = link.get_text(strip=True)
+            if team_name:
+                side = self._determine_side(team_name, sides_text)
+                side_team_names[side] = team_name
+                seen_names.add(team_name)
+
+        # Build a set of manager names by finding all wrestlers after a "(w/" marker.
+        # The HTML pattern is: `) (w/ <a>Manager1</a> & <a>Manager2</a>)`
+        # Or for unlinked managers: `(w/ Max Profit)` as plain text.
+        # We walk all children of results_div; once we see "(w/" in a text node,
+        # every subsequent wrestler link is a manager until we see a closing ")".
+        manager_names: set[str] = set()
+        in_manager_block = False
+        for child in results_div.children:
+            if isinstance(child, str):
+                if re.search(r"\(w/", child):
+                    in_manager_block = True
+                    # Extract any unlinked manager names from this same text node.
+                    # e.g. "(w/ Max Profit)" or "(w/ Max Profit &" or "& Name)"
+                    # Extract only the text between "(w/" and the first ")" if present.
+                    wm = re.search(r"\(w/\s*(.*?)(?:\)|$)", child)
+                    if wm:
+                        for part in re.split(r"\s*[&,]\s*", wm.group(1)):
+                            mgr_name = part.strip()
+                            if mgr_name and len(mgr_name) > 1 and not re.match(r"^[\d\s.,():]+$", mgr_name):
+                                manager_names.add(mgr_name)
+                elif in_manager_block:
+                    # Text node inside a manager block — may contain unlinked names
+                    # Stop at closing paren if present
+                    text = re.sub(r"\).*", "", child).strip()
+                    for part in re.split(r"\s*[&,]\s*", text):
+                        mgr_name = part.strip()
+                        if mgr_name and len(mgr_name) > 1 and not re.match(r"^[\d\s.,():]+$", mgr_name):
+                            manager_names.add(mgr_name)
+                # A closing paren after manager block ends it, but also
+                # "vs." or start of a new side resets it
+                if in_manager_block and re.search(r"\)\s*$", child):
+                    in_manager_block = False
+                if re.search(r"\bvs\.\s*$", child):
+                    in_manager_block = False
+            elif isinstance(child, Tag) and in_manager_block:
+                link_href = child.get("href", "")
+                if "id=2&" in link_href:
+                    manager_names.add(child.get_text(strip=True))
+
+        # Also extract plain-text team names (not linked) from patterns like
+        # "TeamName (Wrestler, Wrestler & Wrestler)"
+        for child in results_div.children:
+            if isinstance(child, str):
+                # Match text like "The Dream Team (" or "CHAOS(" at end of text node
+                for team_match in re.finditer(r"([A-Z][\w\s'.-]+?)\s*\(\s*$", child.strip()):
+                    team_name = team_match.group(1).strip()
+                    if team_name and len(team_name) > 2:
+                        side = self._determine_side(team_name, sides_text)
+                        if side not in side_team_names:
+                            side_team_names[side] = team_name
+                        seen_names.add(team_name)
+
+        # Collect all wrestler links (id=2), marking managers separately
+        for link in results_div.find_all("a", href=re.compile(r"\?id=2&nr=\d+")):
             name = link.get_text(strip=True)
-            if name and name not in seen_names:
-                wrestler_id = _extract_id_from_href(link.get("href", ""))
-                participants.append(
-                    WrestlerRef(name=name, cagematch_id=wrestler_id, is_linked=True)
+            if not name or name in seen_names:
+                continue
+
+            wrestler_id = _extract_id_from_href(link.get("href", ""))
+            is_manager = name in manager_names
+
+            # Determine side by checking which half of the result text contains this name
+            side = self._determine_side(name, sides_text)
+
+            participants.append(
+                WrestlerRef(
+                    name=name, cagematch_id=wrestler_id, is_linked=True,
+                    side=side, team_name=side_team_names.get(side),
+                    role="manager" if is_manager else "competitor",
                 )
-                seen_names.add(name)
+            )
+            seen_names.add(name)
 
-        # Look for unlinked wrestler names in the match results text
-        # These appear as plain text nodes mixed with "vs." separators
-        results_div = match_div.find("div", class_="MatchResults")
-        if results_div:
-            # Walk through children to find text nodes not inside <a> tags
-            for child in results_div.children:
-                if isinstance(child, str):
-                    # Plain text node — may contain unlinked wrestler names
-                    text = child.strip()
-                    if not text:
-                        continue
-                    # Split by common separators
-                    for segment in re.split(r"\s*(?:vs\.|&|,|\band\b)\s*", text):
-                        name = segment.strip()
-                        # Clean up noise
-                        name = re.sub(r"\(c\)", "", name).strip()
-                        name = re.sub(r"\(w/.*?\)", "", name).strip()
-                        name = re.sub(r"\s*(defeat|defeats|draw|by|via)\s.*", "", name, flags=re.IGNORECASE).strip()
-                        name = re.sub(r"^[:\s]+|[:\s]+$", "", name)
+        # Add unlinked managers (plain text names in manager_names that aren't already added)
+        for mgr_name in manager_names:
+            if mgr_name not in seen_names:
+                side = self._determine_side(mgr_name, sides_text)
+                participants.append(WrestlerRef(
+                    name=mgr_name, cagematch_id=None, is_linked=False,
+                    side=side, team_name=side_team_names.get(side),
+                    role="manager",
+                ))
+                seen_names.add(mgr_name)
 
-                        if (
-                            name
-                            and len(name) > 1
-                            and name not in seen_names
-                            and not re.match(r"^[\d\s.,():]+$", name)
-                        ):
-                            participants.append(WrestlerRef(name=name, cagematch_id=None, is_linked=False))
-                            seen_names.add(name)
+        # Look for unlinked wrestler names in plain text nodes
+        for child in results_div.children:
+            if isinstance(child, str):
+                text = child.strip()
+                if not text:
+                    continue
+                for segment in re.split(r"\s*(?:vs\.|&|,|\band\b)\s*", text):
+                    name = segment.strip()
+                    name = re.sub(r"\(c\)", "", name).strip()
+                    name = re.sub(r"\(w/.*?\)?", "", name).strip()
+                    name = re.sub(r"\s*(defeat|defeats|draw|by|via)\s.*", "", name, flags=re.IGNORECASE).strip()
+                    name = re.sub(r"^[:\s()]+|[:\s()]+$", "", name)
+
+                    if (
+                        name
+                        and len(name) > 1
+                        and name not in seen_names
+                        and not re.match(r"^[\d\s.,():]+$", name)
+                        and not re.match(r"^\(?(w/|c\))", name, re.IGNORECASE)
+                    ):
+                        side = self._determine_side(name, sides_text)
+                        participants.append(WrestlerRef(
+                            name=name, cagematch_id=None, is_linked=False,
+                            side=side, team_name=side_team_names.get(side),
+                        ))
+                        seen_names.add(name)
 
         return participants
+
+    async def scrape_event_comments(self, cagematch_event_id: int) -> list[EventComment]:
+        """Scrape user comments/reviews for an event.
+
+        Page=99 is the comments page. HTML structure:
+        - div.Comment contains each review
+        - div.CommentHeader has username (as <a> or text) and date
+        - div.CommentContents has rating in <span class="Rating"> and review text
+        """
+        url = _build_url(1, nr=cagematch_event_id, page=99)
+        html = await self._fetch_page(url, ttl=TTL_EVENT_DETAIL)
+        soup = self._parse_html(html)
+
+        comments: list[EventComment] = []
+
+        for comment_div in soup.find_all("div", class_="Comment"):
+            header = comment_div.find("div", class_="CommentHeader")
+            contents = comment_div.find("div", class_="CommentContents")
+            if not header or not contents:
+                continue
+
+            # Username: either a link or plain text
+            username_link = header.find("a")
+            username = username_link.get_text(strip=True) if username_link else ""
+            if not username:
+                # Fallback: first text in header before " wrote on"
+                header_text = header.get_text(strip=True)
+                if " wrote on " in header_text:
+                    username = header_text.split(" wrote on ")[0].strip()
+
+            # Date: "wrote on DD.MM.YYYY:"
+            header_text = header.get_text(strip=True)
+            comment_date = None
+            date_match = re.search(r"(\d{2}\.\d{2}\.\d{4})", header_text)
+            if date_match:
+                comment_date = _parse_dd_mm_yyyy(date_match.group(1))
+
+            # Rating: <span> with class containing "Rating"
+            rating = None
+            rating_span = contents.find("span", class_=re.compile(r"Rating"))
+            if rating_span:
+                rating = _parse_float(rating_span.get_text(strip=True))
+
+            # Text: everything after the rating, typically in quotes
+            text = ""
+            content_text = contents.get_text(strip=True)
+            # Remove the rating prefix like "[8.0] " or "8.0 "
+            if rating_span:
+                rating_text = rating_span.get_text(strip=True)
+                idx = content_text.find(rating_text)
+                if idx >= 0:
+                    text = content_text[idx + len(rating_text):].strip()
+            if not text:
+                text = content_text
+            # Clean up leading brackets/quotes and trailing quotes
+            text = re.sub(r'^[\s\]\["\u201c]+|[\s"\u201d]+$', "", text)
+
+            if username or text:
+                comments.append(EventComment(
+                    username=username,
+                    date=comment_date,
+                    rating=rating,
+                    text=text,
+                ))
+
+        return comments
+
+    async def _fetch_wikipedia_image(self, wrestler_name: str) -> str | None:
+        """Fetch wrestler image from Wikipedia using the MediaWiki API.
+
+        Strategy: exact title lookup first (most reliable), then
+        title with "(professional wrestler)" disambiguation suffix,
+        then a search query as last resort.
+        """
+        api_url = "https://en.wikipedia.org/w/api.php"
+        headers = {
+            "User-Agent": "Titantron/0.1 (wrestling video organizer; https://github.com/titantron)",
+            "Accept": "application/json",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Try exact title, then with disambiguation suffix
+                for title in [wrestler_name, f"{wrestler_name} (professional wrestler)"]:
+                    params = {
+                        "action": "query",
+                        "titles": title,
+                        "prop": "pageimages",
+                        "pithumbsize": "400",
+                        "format": "json",
+                        "redirects": "1",
+                    }
+                    async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        pages = data.get("query", {}).get("pages", {})
+                        for page_data in pages.values():
+                            if int(page_data.get("pageid", -1)) < 0:
+                                continue
+                            thumb = page_data.get("thumbnail", {})
+                            if thumb.get("source"):
+                                return thumb["source"]
+
+                # Fallback: search
+                params = {
+                    "action": "query",
+                    "generator": "search",
+                    "gsrsearch": f"{wrestler_name} wrestler",
+                    "gsrlimit": "1",
+                    "prop": "pageimages",
+                    "pithumbsize": "400",
+                    "format": "json",
+                }
+                async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        pages = data.get("query", {}).get("pages", {})
+                        for page_data in pages.values():
+                            thumb = page_data.get("thumbnail", {})
+                            if thumb.get("source"):
+                                return thumb["source"]
+        except Exception:
+            logger.debug(f"Wikipedia image lookup failed for {wrestler_name}")
+        return None
+
+    async def scrape_wrestler_profile(self, cagematch_wrestler_id: int) -> WrestlerProfile | None:
+        """Scrape a wrestler's profile page for biographical data."""
+        url = _build_url(2, nr=cagematch_wrestler_id)
+        html = await self._fetch_page(url, ttl=TTL_WRESTLER)
+        soup = self._parse_html(html)
+
+        # Name from <h1>
+        h1 = soup.find("h1")
+        name = h1.get_text(strip=True) if h1 else None
+        if not name:
+            return None
+
+        # "Also known as" aliases from <h2> immediately after <h1>
+        alter_egos = None
+        h2 = soup.find("h2")
+        if h2:
+            h2_text = h2.get_text(strip=True)
+            if h2_text.startswith("Also known as"):
+                alter_egos = h2_text.removeprefix("Also known as").strip()
+
+        # Image from Wikipedia (Cagematch doesn't host images)
+        image_url = await self._fetch_wikipedia_image(name)
+
+        profile = WrestlerProfile(name=name, image_url=image_url, alter_egos=alter_egos)
+
+        # Parse InformationBoxRow fields (same pattern as event detail)
+        label_map = {
+            "Birthday": "birth_date",
+            "Birthplace": "birth_place",
+            "Height": "height",
+            "Weight": "weight",
+            "Beginning of in-ring career": "debut",
+            "Wrestling style": "style",
+            "Roles": "roles",
+            "Trainer": "trainers",
+            "Nicknames": "nicknames",
+            "Signature moves": "signature_moves",
+            "Alter egos": "alter_egos",
+        }
+
+        for row in soup.find_all("div", class_="InformationBoxRow"):
+            label_el = row.find("div", class_="InformationBoxTitle")
+            value_el = row.find("div", class_="InformationBoxContents")
+            if not label_el or not value_el:
+                continue
+            label = label_el.get_text(strip=True).rstrip(":")
+            field = label_map.get(label)
+            if not field:
+                continue
+
+            # Replace <br> with separator before extracting text so list values get proper formatting
+            for br in value_el.find_all("br"):
+                br.replace_with("\n")
+            value = ", ".join(part.strip() for part in value_el.get_text().split("\n") if part.strip())
+            if not value:
+                continue
+
+            if field == "birth_date":
+                profile.birth_date = _parse_dd_mm_yyyy(value)
+            elif field == "alter_egos" and profile.alter_egos:
+                # Prefer the <h2> "Also known as" header — it's more comprehensive
+                pass
+            else:
+                setattr(profile, field, value)
+
+        # Rating is in a separate RatingsBox div, not in InformationBoxRow
+        ratings_box = soup.find("div", class_="RatingsBox")
+        if ratings_box:
+            rating_el = ratings_box.find("div", class_="RatingsBoxAdjustedRating")
+            if rating_el:
+                try:
+                    profile.rating = float(rating_el.get_text(strip=True))
+                except ValueError:
+                    pass
+            # Votes in RatingsBoxText: "Valid votes: N"
+            text_el = ratings_box.find("div", class_="RatingsBoxText")
+            if text_el:
+                import re
+                match = re.search(r"Valid votes:\s*(\d+)", text_el.get_text())
+                if match:
+                    profile.votes = int(match.group(1))
+
+        return profile
+
+    @staticmethod
+    def _determine_side(name: str, sides_text: list[str]) -> int:
+        """Determine which side (1-indexed) a wrestler is on based on result text.
+
+        Supports N-way matches (three-way, four-way gauntlet, etc.) by checking
+        each chunk from the 'vs.' split.
+        """
+        if len(sides_text) < 2:
+            return 1
+        # Check which chunk contains this name (exact match first)
+        for i, chunk in enumerate(sides_text):
+            if name in chunk:
+                return i + 1
+        # Case-insensitive fallback
+        name_lower = name.lower()
+        for i, chunk in enumerate(sides_text):
+            if name_lower in chunk.lower():
+                return i + 1
+        return 1  # default

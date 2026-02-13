@@ -20,6 +20,7 @@ class VideoItem(Base):
     extracted_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     media_source_id: Mapped[str | None] = mapped_column(String, nullable=True)
     has_trickplay: Mapped[bool] = mapped_column(Boolean, default=False)
+    image_tag: Mapped[str | None] = mapped_column(String, nullable=True)
     library_id: Mapped[int] = mapped_column(Integer, ForeignKey("libraries.id"), nullable=False)
     matched_event_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("events.id"), nullable=True)
     match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

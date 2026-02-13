@@ -20,7 +20,7 @@ class Match(Base):
     duration: Mapped[str | None] = mapped_column(String, nullable=True)
 
     event = relationship("Event", back_populates="matches")
-    participants = relationship("MatchParticipant", back_populates="match")
+    participants = relationship("MatchParticipant", back_populates="match", cascade="all, delete-orphan")
     chapter = relationship("Chapter", back_populates="match", uselist=False)
 
 
@@ -31,6 +31,7 @@ class MatchParticipant(Base):
     match_id: Mapped[int] = mapped_column(Integer, ForeignKey("matches.id"), nullable=False)
     wrestler_id: Mapped[int] = mapped_column(Integer, ForeignKey("wrestlers.id"), nullable=False)
     side: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    team_name: Mapped[str | None] = mapped_column(String, nullable=True)
     is_winner: Mapped[bool] = mapped_column(default=False)
     role: Mapped[str] = mapped_column(String, default="competitor")
 
