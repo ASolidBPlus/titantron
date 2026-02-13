@@ -4,6 +4,40 @@ Pro wrestling video organizer/player powered by Jellyfin + Cagematch.net.
 
 Connects to your Jellyfin server, matches wrestling video files to events/matches from Cagematch via web scraping, and lets you browse, chapter, and play them.
 
+## Docker (recommended)
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  titantron:
+    image: ghcr.io/asolidbplus/titantron:latest
+    ports:
+      - "8765:8765"
+    volumes:
+      - titantron-data:/data
+      - /path/to/wrestling/library:/media:ro
+    environment:
+      - TITANTRON_LOG_LEVEL=info
+      # - TITANTRON_ADMIN_PASSWORD=your-password-here
+    restart: unless-stopped
+
+volumes:
+  titantron-data:
+```
+
+Replace `/path/to/wrestling/library` with the path to your Jellyfin wrestling library on the host.
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+The app runs on port **8765**. Open `http://your-server:8765` and follow the setup wizard.
+
+The SQLite database is stored in a Docker volume at `/data/titantron.db` and persists across container restarts.
+
 ## Development Setup
 
 ### Backend
