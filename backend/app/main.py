@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db
 from app.dependencies import require_admin
-from app.routers import admin_auth, auth, browse, libraries, matching, player, search, sync, wrestlers
+from app.routers import admin_auth, analysis, auth, browse, libraries, matching, player, search, sync, wrestlers
 
 
 @asynccontextmanager
@@ -47,6 +47,7 @@ app.include_router(matching.router, prefix="/api/v1/matching", tags=["matching"]
 # Client-facing routers (no admin auth required)
 app.include_router(browse.router, prefix="/api/v1/browse", tags=["browse"])
 app.include_router(player.router, prefix="/api/v1/player", tags=["player"])
+app.include_router(analysis.router, prefix="/api/v1/player", tags=["analysis"])
 app.include_router(wrestlers.router, prefix="/api/v1/wrestlers", tags=["wrestlers"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["search"])
 
