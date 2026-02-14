@@ -70,6 +70,15 @@ class JellyfinClient:
                 resp.raise_for_status()
                 return await resp.json()
 
+    async def _request_bytes(self, path: str) -> bytes:
+        """Download binary data (e.g., trickplay sprite sheet images)."""
+        url = f"{self.server_url}{path}"
+        headers = {"Authorization": self._auth_header()}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                resp.raise_for_status()
+                return await resp.read()
+
     async def authenticate(self, server_url: str, username: str, password: str) -> AuthResult:
         self.server_url = server_url.rstrip("/")
         data = await self._request("POST", "/Users/AuthenticateByName", json={"Username": username, "Pw": password})
