@@ -15,8 +15,9 @@
 		reportPlaybackProgress,
 		reportPlaybackStopped,
 	} from '$lib/api/client';
-	import type { EventDetail, EventComment, WrestlingMatch, MatchParticipant, PlayerInfo, Chapter } from '$lib/types';
+	import type { EventDetail, EventComment, WrestlingMatch, MatchParticipant, PlayerInfo, Chapter, Detection } from '$lib/types';
 	import PlayerControls from '$lib/components/player/PlayerControls.svelte';
+	import DetectionFilmstrip from '$lib/components/player/DetectionFilmstrip.svelte';
 	import { ratingColor } from '$lib/utils/rating';
 
 	let loading = $state(true);
@@ -38,6 +39,7 @@
 	let chapters = $state<Chapter[]>([]);
 	let progressInterval: ReturnType<typeof setInterval> | null = null;
 	let markingMatch = $state<number | null>(null);
+	let detections = $state<Detection[]>([]);
 	let isFullscreen = $state(false);
 	let showSidebar = $state(true);
 	let sidebarTab = $state<'matches' | 'reviews'>('matches');
@@ -171,6 +173,7 @@
 		activeVideoId = null;
 		playerInfo = null;
 		chapters = [];
+		detections = [];
 	}
 
 	function destroyPlayer() {
@@ -301,6 +304,16 @@
 		chapters = await getChapters(playerInfo.video.id);
 	}
 
+	async function handleAcceptChapter(ticks: number, title: string) {
+		if (!activeVideoId) return;
+		try {
+			await createChapter(activeVideoId, { title, start_ticks: ticks });
+			await reloadChapters();
+		} catch (e) {
+			console.error('Failed to create chapter:', e);
+		}
+	}
+
 	async function loadComments() {
 		if (commentsLoaded || commentsLoading) return;
 		commentsLoading = true;
@@ -418,7 +431,7 @@
 								{isPlaying}
 								{chapters}
 								trickplay={playerInfo.trickplay}
-								streamInfo={playerInfo.stream}
+								{detections}
 							/>
 						</div>
 					</div>
@@ -433,6 +446,21 @@
 							Stop
 						</button>
 					</div>
+
+					<!-- Detection Filmstrip -->
+					{#if playerInfo.trickplay && playerInfo.video.duration_ticks}
+						<div class="mt-3">
+							<DetectionFilmstrip
+								videoId={activeVideoId}
+								trickplay={playerInfo.trickplay}
+								durationTicks={playerInfo.video.duration_ticks}
+								currentTimeTicks={Math.floor(currentTime * 10_000_000)}
+								onSeekTo={(ticks) => { videoEl.currentTime = ticks / 10_000_000; }}
+								onAcceptChapter={handleAcceptChapter}
+								onDetectionsReady={(d) => { detections = d; }}
+							/>
+						</div>
+					{/if}
 
 					<!-- Chapters (below player) -->
 					{#if sortedChapters.length > 0}
