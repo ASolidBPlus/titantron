@@ -45,23 +45,29 @@
 		return `${m}:${s.toString().padStart(2, '0')}`;
 	}
 
-	function getTrickplayStyle(hoverRatio: number): { url: string; bgPosition: string; width: number; height: number } | null {
+	function getTrickplayStyle(hoverRatio: number): { url: string; bgPosition: string; width: number; height: number; sheetWidth: number; sheetHeight: number } | null {
 		if (!trickplay || !duration) return null;
-		const positionTicks = Math.floor(hoverRatio * duration * 10_000_000);
-		const thumbIndex = Math.floor(positionTicks / trickplay.interval);
+		// Jellyfin interval is in milliseconds
+		const positionMs = Math.floor(hoverRatio * duration * 1000);
+		const thumbIndex = Math.floor(positionMs / trickplay.interval);
 		const tilesPerSheet = trickplay.tile_width * trickplay.tile_height;
 		const sheetIndex = Math.floor(thumbIndex / tilesPerSheet);
 		const tileOnSheet = thumbIndex % tilesPerSheet;
 		const col = tileOnSheet % trickplay.tile_width;
 		const row = Math.floor(tileOnSheet / trickplay.tile_width);
-		const thumbWidth = trickplay.width / trickplay.tile_width;
-		const thumbHeight = trickplay.height / trickplay.tile_height;
+		// width/height from Jellyfin are individual thumbnail dimensions
+		const thumbWidth = trickplay.width;
+		const thumbHeight = trickplay.height;
+		const sheetWidth = trickplay.width * trickplay.tile_width;
+		const sheetHeight = trickplay.height * trickplay.tile_height;
 
 		return {
 			url: `${trickplay.base_url}${sheetIndex}.jpg?api_key=${streamInfo.api_key}`,
 			bgPosition: `-${col * thumbWidth}px -${row * thumbHeight}px`,
 			width: thumbWidth,
 			height: thumbHeight,
+			sheetWidth,
+			sheetHeight,
 		};
 	}
 
@@ -161,7 +167,7 @@
 					{#if tp}
 						<div
 							class="absolute bottom-8 -translate-x-1/2 border border-titan-border rounded overflow-hidden pointer-events-none"
-							style="left: {hoverPosition * 100}%; width: {tp.width}px; height: {tp.height}px; background-image: url('{tp.url}'); background-position: {tp.bgPosition}; background-size: {trickplay.width}px {trickplay.height}px;"
+							style="left: {hoverPosition * 100}%; width: {tp.width}px; height: {tp.height}px; background-image: url('{tp.url}'); background-position: {tp.bgPosition}; background-size: {tp.sheetWidth}px {tp.sheetHeight}px;"
 						></div>
 					{/if}
 				{/if}

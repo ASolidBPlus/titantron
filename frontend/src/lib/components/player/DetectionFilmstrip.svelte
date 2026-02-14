@@ -34,9 +34,11 @@
 	let popoverX = $state(0);
 	let popoverY = $state(0);
 
-	// Thumbnail dimensions
-	const thumbPixelW = trickplay.width / trickplay.tile_width;
-	const thumbPixelH = trickplay.height / trickplay.tile_height;
+	// Thumbnail dimensions (width/height from Jellyfin are individual thumb size)
+	const thumbPixelW = trickplay.width;
+	const thumbPixelH = trickplay.height;
+	const sheetPixelW = trickplay.width * trickplay.tile_width;
+	const sheetPixelH = trickplay.height * trickplay.tile_height;
 	const tilesPerSheet = trickplay.tile_width * trickplay.tile_height;
 
 	// Display dimensions (scale down thumbnails)
@@ -71,7 +73,7 @@
 		return {
 			url: `${trickplay.base_url}${sheetIndex}.jpg?api_key=${streamInfo.api_key}`,
 			bgPosition: `-${col * thumbPixelW * scale}px -${row * thumbPixelH * scale}px`,
-			bgSize: `${trickplay.width * scale}px ${trickplay.height * scale}px`,
+			bgSize: `${sheetPixelW * scale}px ${sheetPixelH * scale}px`,
 		};
 	}
 
@@ -311,7 +313,7 @@
 									background-position: {style.bgPosition};
 									background-size: {style.bgSize};
 									background-repeat: no-repeat;"
-								onclick={() => onSeekTo(i * trickplay.interval)}
+								onclick={() => onSeekTo(i * trickplay.interval * 10_000)}
 								role="button"
 								tabindex="-1"
 							></div>
