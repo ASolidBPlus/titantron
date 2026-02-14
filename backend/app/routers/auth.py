@@ -16,8 +16,8 @@ from app.services.jellyfin_client import JellyfinClient
 
 router = APIRouter()
 
-# Persist connection info to a JSON file (single-user)
-_CONN_FILE = Path("data/connection.json")
+# Persist connection info next to the database (survives container restarts)
+_CONN_FILE = settings.db_dir / "connection.json"
 
 
 def _load_connection() -> dict:
