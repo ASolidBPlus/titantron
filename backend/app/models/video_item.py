@@ -29,3 +29,4 @@ class VideoItem(Base):
     library = relationship("Library", back_populates="video_items")
     matched_event = relationship("Event", back_populates="video_items")
     chapters = relationship("Chapter", back_populates="video_item", order_by="Chapter.start_ticks")
+    analysis_result = relationship("AnalysisResult", back_populates="video_item", uselist=False)

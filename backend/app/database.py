@@ -13,6 +13,7 @@ class Base(DeclarativeBase):
 
 async def init_db():
     from app.models import (  # noqa: F401
+        analysis_result,
         chapter,
         event,
         library,
