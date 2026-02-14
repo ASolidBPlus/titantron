@@ -1,6 +1,8 @@
 import logging
+import os
 
-from sqlalchemy import inspect, text
+from alembic import command
+from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -16,28 +18,25 @@ class Base(DeclarativeBase):
     pass
 
 
-def _migrate_schema(conn):
-    """Apply schema migrations for columns that create_all can't handle.
+def _run_alembic_upgrade():
+    """Run alembic upgrade head to apply all pending migrations.
 
-    SQLAlchemy's create_all only creates new tables — it won't add columns
-    to existing tables. This function checks for missing columns and adds
-    them via ALTER TABLE. Safe to run repeatedly (idempotent).
+    All migrations are idempotent (check if table/column exists before acting),
+    so this safely handles:
+    - Fresh DB: creates alembic_version + all tables/columns
+    - Legacy DB (no alembic_version): runs all migrations, skips what exists
+    - Normal upgrade: applies only new migrations
     """
-    inspector = inspect(conn)
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    alembic_ini = os.path.join(backend_dir, "alembic.ini")
 
-    migrations = [
-        # (table, column, sql_type)
-        ("libraries", "jellyfin_path", "VARCHAR"),
-        ("libraries", "local_path", "VARCHAR"),
-    ]
+    alembic_cfg = Config(alembic_ini)
+    # Override DB URL to match runtime config (sync driver for Alembic)
+    sync_url = f"sqlite:///{settings.db_path}"
+    alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
 
-    for table_name, column, sql_type in migrations:
-        if table_name not in inspector.get_table_names():
-            continue
-        existing = {c["name"] for c in inspector.get_columns(table_name)}
-        if column not in existing:
-            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column} {sql_type}"))
-            logger.info("Added column %s.%s", table_name, column)
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Database migrations applied successfully")
 
 
 async def init_db():
@@ -53,9 +52,11 @@ async def init_db():
         wrestler,
     )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_migrate_schema)
+    # Ensure data directory exists
+    settings.db_dir.mkdir(parents=True, exist_ok=True)
+
+    # Run Alembic migrations (handles fresh, legacy, and normal upgrades)
+    _run_alembic_upgrade()
 
 
 async def get_db() -> AsyncSession:
