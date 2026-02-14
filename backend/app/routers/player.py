@@ -139,28 +139,27 @@ async def get_player_info(
             f"&PlaySessionId={play_session_id}"
         )
 
-    # Trickplay metadata (optional)
+    # Trickplay metadata (always check Jellyfin — DB flag may be stale)
     trickplay_data = None
-    if video.has_trickplay:
-        try:
-            detail = await client.get_item_detail(video.jellyfin_item_id)
-            tp = detail.get("Trickplay", {})
-            for media_id, resolutions in tp.items():
-                for res_str, meta in resolutions.items():
-                    trickplay_data = {
-                        "resolution": int(res_str),
-                        "width": meta["Width"],
-                        "height": meta["Height"],
-                        "tile_width": meta["TileWidth"],
-                        "tile_height": meta["TileHeight"],
-                        "thumbnail_count": meta["ThumbnailCount"],
-                        "interval": meta["Interval"],
-                        "base_url": f"{public_url}/Videos/{video.jellyfin_item_id}/Trickplay/{res_str}/",
-                    }
-                    break
+    try:
+        detail = await client.get_item_detail(video.jellyfin_item_id)
+        tp = detail.get("Trickplay", {})
+        for media_id, resolutions in tp.items():
+            for res_str, meta in resolutions.items():
+                trickplay_data = {
+                    "resolution": int(res_str),
+                    "width": meta["Width"],
+                    "height": meta["Height"],
+                    "tile_width": meta["TileWidth"],
+                    "tile_height": meta["TileHeight"],
+                    "thumbnail_count": meta["ThumbnailCount"],
+                    "interval": meta["Interval"],
+                    "base_url": f"{public_url}/Videos/{video.jellyfin_item_id}/Trickplay/{res_str}/",
+                }
                 break
-        except Exception:
-            pass  # Trickplay is optional
+            break
+    except Exception:
+        pass  # Trickplay is optional
 
     # Event data with matches and participants
     event_data = None

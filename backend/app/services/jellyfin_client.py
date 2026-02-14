@@ -109,7 +109,7 @@ class JellyfinClient:
         params = {
             "ParentId": parent_id,
             "IncludeItemTypes": "Movie,Video",
-            "Fields": "Path,MediaSources,DateCreated,PremiereDate,ImageTags,PrimaryImageAspectRatio",
+            "Fields": "Path,MediaSources,DateCreated,PremiereDate,ImageTags,PrimaryImageAspectRatio,Trickplay",
             "Recursive": "true",
             "SortBy": "PremiereDate,SortName",
             "SortOrder": "Descending",
