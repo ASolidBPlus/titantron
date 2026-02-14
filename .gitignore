@@ -21,6 +21,10 @@ build/
 .env
 *.db
 
+# Claude Code (hooks may contain credentials/local paths)
+.claude/hooks/
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
