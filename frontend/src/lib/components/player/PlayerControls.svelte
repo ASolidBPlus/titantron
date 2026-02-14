@@ -43,6 +43,9 @@
 		return `${m}:${s.toString().padStart(2, '0')}`;
 	}
 
+	// Display size for trickplay preview thumbnail
+	const TRICKPLAY_DISPLAY_WIDTH = 160;
+
 	function getTrickplayStyle(hoverRatio: number): { url: string; bgPosition: string; width: number; height: number; sheetWidth: number; sheetHeight: number } | null {
 		if (!trickplay || !duration) return null;
 		// Jellyfin interval is in milliseconds
@@ -53,11 +56,12 @@
 		const tileOnSheet = thumbIndex % tilesPerSheet;
 		const col = tileOnSheet % trickplay.tile_width;
 		const row = Math.floor(tileOnSheet / trickplay.tile_width);
-		// width/height from Jellyfin are individual thumbnail dimensions
-		const thumbWidth = trickplay.width;
-		const thumbHeight = trickplay.height;
-		const sheetWidth = trickplay.width * trickplay.tile_width;
-		const sheetHeight = trickplay.height * trickplay.tile_height;
+		// Scale down from raw Jellyfin dimensions to a reasonable preview size
+		const scale = TRICKPLAY_DISPLAY_WIDTH / trickplay.width;
+		const thumbWidth = Math.round(trickplay.width * scale);
+		const thumbHeight = Math.round(trickplay.height * scale);
+		const sheetWidth = Math.round(trickplay.width * trickplay.tile_width * scale);
+		const sheetHeight = Math.round(trickplay.height * trickplay.tile_height * scale);
 
 		return {
 			url: `${trickplay.base_url}${sheetIndex}.jpg`,
