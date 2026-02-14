@@ -75,6 +75,22 @@
 		};
 	}
 
+	// Combine skip reason from status (polling) and results (persisted)
+	let audioSkipReason = $derived(results?.audio_skip_reason ?? status.audio_skip_reason);
+
+	function audioSkipMessage(reason: string): string {
+		if (reason === 'no_path_mapping') {
+			return 'Audio skipped — configure path mapping in Admin \u2192 Setup';
+		}
+		if (reason.startsWith('file_not_found:')) {
+			return 'Audio skipped — video file not accessible (check Docker volume mounts)';
+		}
+		if (reason.startsWith('error:')) {
+			return `Audio failed: ${reason.slice(6)}`;
+		}
+		return `Audio skipped: ${reason}`;
+	}
+
 	function markerColor(type: string): string {
 		switch (type) {
 			case 'scene_change': return '#3b82f6';
@@ -351,6 +367,11 @@
 					{/if}
 					{#if results.audio.length > 0}
 						&middot; {results.audio.length} audio
+					{/if}
+					{#if audioSkipReason}
+						<span class="ml-2 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
+							{audioSkipMessage(audioSkipReason)}
+						</span>
 					{/if}
 				</div>
 			</div>

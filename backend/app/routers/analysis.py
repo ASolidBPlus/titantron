@@ -63,6 +63,7 @@ async def get_analysis_status(
         "total_steps": analysis.total_steps,
         "message": analysis.message,
         "error": analysis.error,
+        "audio_skip_reason": analysis.audio_skip_reason,
     }
 
 
@@ -83,6 +84,7 @@ async def get_analysis_results(
         "visual": json.loads(analysis.visual_detections or "[]"),
         "audio": json.loads(analysis.audio_detections or "[]"),
         "completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None,
+        "audio_skip_reason": analysis.audio_skip_reason,
     }
 
 

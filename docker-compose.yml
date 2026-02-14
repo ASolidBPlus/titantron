@@ -5,6 +5,11 @@ services:
       - "8765:8765"
     volumes:
       - titantron-config:/config
+      # Mount video libraries for audio analysis (bell/music detection):
+      # - /path/to/media:/media:ro
+      # Then in Admin > Setup, set:
+      #   Jellyfin Path: /data/videos  (Jellyfin's internal path)
+      #   Local Path:    /media         (container mount point)
     env_file:
       - .env
     environment:

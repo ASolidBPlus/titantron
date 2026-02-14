@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
+from app.config import get_setting
 from app.database import get_db
 from app.models.chapter import Chapter
 from app.models.event import Event
@@ -98,7 +98,8 @@ async def get_player_info(
 
     # Public URL for client-facing URLs (stream, trickplay)
     # Backend still uses client.server_url for API calls
-    public_url = settings.jellyfin_public_url.rstrip("/") if settings.jellyfin_public_url else client.server_url
+    jellyfin_public_url = get_setting("jellyfin_public_url")
+    public_url = jellyfin_public_url.rstrip("/") if jellyfin_public_url else client.server_url
 
     # Ask Jellyfin for optimal playback method (direct play vs transcode)
     play_session_id = str(uuid.uuid4())

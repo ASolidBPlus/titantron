@@ -2,7 +2,7 @@ import hmac
 import secrets
 import time
 
-from app.config import settings
+from app.config import get_setting
 
 # In-memory session store: {token: expiry_timestamp}
 _sessions: dict[str, float] = {}
@@ -11,11 +11,11 @@ COOKIE_NAME = "titantron_admin"
 
 
 def is_password_required() -> bool:
-    return bool(settings.admin_password)
+    return bool(get_setting("admin_password"))
 
 
 def verify_password(password: str) -> bool:
-    return hmac.compare_digest(password, settings.admin_password)
+    return hmac.compare_digest(password, get_setting("admin_password"))
 
 
 def create_session() -> str:
@@ -36,3 +36,7 @@ def validate_session(token: str) -> bool:
 
 def delete_session(token: str) -> None:
     _sessions.pop(token, None)
+
+
+def invalidate_all_sessions() -> None:
+    _sessions.clear()

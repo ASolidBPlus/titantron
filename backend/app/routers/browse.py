@@ -12,15 +12,16 @@ from app.models.match import Match, MatchParticipant
 from app.models.promotion import Promotion
 from app.models.video_item import VideoItem
 from app.models.wrestler import Wrestler
-from app.config import settings
+from app.config import get_setting
 from app.routers.auth import _load_connection
 from app.services.cagematch_scraper import CagematchScraper
 
 
 def _jellyfin_public_url() -> str:
     """Get the public-facing Jellyfin URL for browser-accessible resources."""
-    if settings.jellyfin_public_url:
-        return settings.jellyfin_public_url.rstrip("/")
+    public_url = get_setting("jellyfin_public_url")
+    if public_url:
+        return public_url.rstrip("/")
     conn = _load_connection()
     return conn.get("url", "")
 

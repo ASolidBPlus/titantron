@@ -305,6 +305,32 @@ export function adminLogout(): Promise<{ success: boolean }> {
 	return request('/admin/logout', { method: 'POST' });
 }
 
+// App Settings
+export interface AppSettings {
+	jellyfin_public_url: string;
+	admin_password_is_set: boolean;
+	scrape_rate_limit: number;
+	scrape_burst: number;
+}
+
+export interface AppSettingsUpdate {
+	jellyfin_public_url?: string;
+	admin_password?: string;
+	scrape_rate_limit?: number;
+	scrape_burst?: number;
+}
+
+export function getAppSettings(): Promise<AppSettings> {
+	return request('/admin/settings');
+}
+
+export function updateAppSettings(data: AppSettingsUpdate): Promise<{ success: boolean; updated: string[] }> {
+	return request('/admin/settings', {
+		method: 'PUT',
+		body: JSON.stringify(data)
+	});
+}
+
 // Analysis
 export function startAnalysis(videoId: number): Promise<{ message: string }> {
 	return request(`/player/${videoId}/analyze`, { method: 'POST' });

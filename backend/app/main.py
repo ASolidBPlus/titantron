@@ -6,16 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import settings
+from app.config import load_runtime_settings, settings
 from app.database import init_db
 from app.dependencies import require_admin
-from app.routers import admin_auth, analysis, auth, browse, libraries, matching, player, search, sync, wrestlers
+from app.routers import admin_auth, admin_settings, analysis, auth, browse, libraries, matching, player, search, sync, wrestlers
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.db_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
+    load_runtime_settings()
     yield
 
 
@@ -39,6 +40,7 @@ app.add_middleware(
 app.include_router(admin_auth.router, prefix="/api/v1/admin", tags=["admin"])
 
 # Admin-only routers (protected by require_admin)
+app.include_router(admin_settings.router, prefix="/api/v1/admin", tags=["admin-settings"], dependencies=[Depends(require_admin)])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"], dependencies=[Depends(require_admin)])
 app.include_router(libraries.router, prefix="/api/v1/libraries", tags=["libraries"], dependencies=[Depends(require_admin)])
 app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"], dependencies=[Depends(require_admin)])

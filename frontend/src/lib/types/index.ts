@@ -188,12 +188,14 @@ export interface AnalysisStatus {
 	total_steps?: number;
 	message?: string;
 	error?: string;
+	audio_skip_reason?: string;
 }
 
 export interface AnalysisResults {
 	visual: Detection[];
 	audio: Detection[];
 	completed_at: string | null;
+	audio_skip_reason?: string;
 }
 
 export interface TrickplayInfo {

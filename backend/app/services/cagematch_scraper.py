@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import aiohttp
 from bs4 import BeautifulSoup, Tag
 
-from app.config import settings
+from app.config import get_setting, settings
 from app.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -151,8 +151,8 @@ class WrestlerProfile:
 class CagematchScraper:
     def __init__(self):
         self.rate_limiter = RateLimiter(
-            requests_per_second=settings.scrape_rate_limit,
-            burst=settings.scrape_burst,
+            requests_per_second=get_setting("scrape_rate_limit"),
+            burst=get_setting("scrape_burst"),
         )
         self._cache: dict[str, tuple[str, datetime]] = {}
 

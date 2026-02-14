@@ -15,6 +15,7 @@
 		{ href: '/admin', label: 'Dashboard' },
 		{ href: '/admin/matching', label: 'Matching' },
 		{ href: '/admin/setup', label: 'Setup' },
+		{ href: '/admin/settings', label: 'Settings' },
 		{ href: '/admin/test-scrape', label: 'Test Scrape' },
 	];
 
@@ -94,8 +95,10 @@
 	</div>
 {:else}
 	<div class="min-h-[calc(100vh-3.5rem)]">
+		<div class="h-0.5 bg-titan-accent"></div>
 		<div class="border-b border-titan-border bg-titan-surface">
 			<div class="max-w-5xl mx-auto px-4 flex items-center h-11">
+				<span class="text-[10px] font-bold tracking-wider px-2 py-0.5 rounded bg-titan-accent/20 text-titan-accent mr-3">ADMIN</span>
 				<div class="flex items-center gap-1 flex-1">
 					{#each tabs as tab}
 						<a
@@ -108,14 +111,20 @@
 						</a>
 					{/each}
 				</div>
-				{#if required}
-					<button
-						onclick={handleLogout}
+				<div class="flex items-center gap-3">
+					<a
+						href="/"
 						class="text-xs text-titan-text-muted hover:text-titan-text transition-colors"
-					>
-						Logout
-					</button>
-				{/if}
+					>&larr; Browse</a>
+					{#if required}
+						<button
+							onclick={handleLogout}
+							class="text-xs text-titan-text-muted hover:text-titan-text transition-colors"
+						>
+							Logout
+						</button>
+					{/if}
+				</div>
 			</div>
 		</div>
 		{@render children()}

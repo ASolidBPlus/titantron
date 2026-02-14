@@ -127,6 +127,7 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
 
             # --- Audio detection ---
             audio_detections: list[dict] = []
+            audio_skip_reason: str | None = None
             local_path = None
 
             # Resolve local file path via library path mapping
@@ -154,14 +155,17 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
                     )
                 except Exception as e:
                     logger.error(f"Audio detection failed: {e}")
+                    audio_skip_reason = f"error:{e}"
                     _analysis_progress[video_id]["message"] = f"Audio detection failed: {e}"
             else:
                 if not local_path:
+                    audio_skip_reason = "no_path_mapping"
                     logger.info(f"No local path mapping for video {video_id}, skipping audio")
                     _analysis_progress[video_id]["message"] = (
                         "Audio analysis skipped (no path mapping configured)"
                     )
                 else:
+                    audio_skip_reason = f"file_not_found:{local_path}"
                     logger.warning(f"Local file not found: {local_path}")
                     _analysis_progress[video_id]["message"] = (
                         f"Audio analysis skipped (file not found: {local_path})"
@@ -169,10 +173,12 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
 
             # Save final results
             analysis.audio_detections = json.dumps(audio_detections)
+            analysis.audio_skip_reason = audio_skip_reason
             analysis.status = "completed"
             analysis.completed_at = datetime.now()
+            skip_note = f" (skipped: {audio_skip_reason.split(':')[0]})" if audio_skip_reason else ""
             analysis.message = (
-                f"Done: {len(visual_detections)} visual, {len(audio_detections)} audio detections"
+                f"Done: {len(visual_detections)} visual, {len(audio_detections)} audio detections{skip_note}"
             )
             analysis.error = None
             await db.commit()
@@ -180,6 +186,7 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
             _analysis_progress[video_id].update({
                 "status": "completed",
                 "message": analysis.message,
+                "audio_skip_reason": audio_skip_reason,
             })
 
     except Exception as e:
