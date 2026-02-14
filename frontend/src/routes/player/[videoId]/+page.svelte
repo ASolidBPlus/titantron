@@ -284,7 +284,6 @@
 							{isPlaying}
 							{chapters}
 							trickplay={playerInfo.trickplay}
-							streamInfo={playerInfo.stream}
 							{detections}
 						/>
 					</div>
@@ -306,7 +305,6 @@
 						<DetectionFilmstrip
 							{videoId}
 							trickplay={playerInfo.trickplay}
-							streamInfo={playerInfo.stream}
 							durationTicks={playerInfo.video.duration_ticks}
 							currentTimeTicks={Math.floor(currentTime * 10_000_000)}
 							onSeekTo={(ticks) => { videoEl.currentTime = ticks / 10_000_000; }}

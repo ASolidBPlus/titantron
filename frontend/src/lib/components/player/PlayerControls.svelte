@@ -9,7 +9,6 @@
 		isPlaying: boolean;
 		chapters: Chapter[];
 		trickplay: TrickplayInfo | null;
-		streamInfo: { api_key: string; server_url: string };
 		detections?: Detection[];
 	}
 
@@ -20,7 +19,6 @@
 		isPlaying,
 		chapters,
 		trickplay,
-		streamInfo,
 		detections = [],
 	}: Props = $props();
 
@@ -62,7 +60,7 @@
 		const sheetHeight = trickplay.height * trickplay.tile_height;
 
 		return {
-			url: `${trickplay.base_url}${sheetIndex}.jpg?api_key=${streamInfo.api_key}`,
+			url: `${trickplay.base_url}${sheetIndex}.jpg`,
 			bgPosition: `-${col * thumbWidth}px -${row * thumbHeight}px`,
 			width: thumbWidth,
 			height: thumbHeight,

@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -154,7 +155,7 @@ async def get_player_info(
                     "tile_height": meta["TileHeight"],
                     "thumbnail_count": meta["ThumbnailCount"],
                     "interval": meta["Interval"],
-                    "base_url": f"{public_url}/Videos/{video.jellyfin_item_id}/Trickplay/{res_str}/",
+                    "base_url": f"/api/v1/player/{video_id}/trickplay/{res_str}/",
                 }
                 break
             break
@@ -403,3 +404,24 @@ async def playback_stopped(
         "PlaySessionId": report.play_session_id,
     })
     return {"success": True}
+
+
+# --- Trickplay proxy ---
+
+
+@router.get("/{video_id}/trickplay/{resolution}/{index}")
+async def get_trickplay_tile(
+    video_id: int,
+    resolution: int,
+    index: int,
+    db: AsyncSession = Depends(get_db),
+    client: JellyfinClient = Depends(get_jellyfin_client),
+):
+    """Proxy trickplay sprite sheets from Jellyfin to avoid CORS issues."""
+    video = await db.get(VideoItem, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    data = await client._request_bytes(
+        f"/Videos/{video.jellyfin_item_id}/Trickplay/{resolution}/{index}.jpg"
+    )
+    return Response(content=data, media_type="image/jpeg")

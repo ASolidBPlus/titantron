@@ -6,7 +6,6 @@
 	interface Props {
 		videoId: number;
 		trickplay: TrickplayInfo;
-		streamInfo: { api_key: string; server_url: string };
 		durationTicks: number;
 		currentTimeTicks: number;
 		onSeekTo: (ticks: number) => void;
@@ -17,7 +16,6 @@
 	let {
 		videoId,
 		trickplay,
-		streamInfo,
 		durationTicks,
 		currentTimeTicks,
 		onSeekTo,
@@ -71,7 +69,7 @@
 		const row = Math.floor(tileOnSheet / trickplay.tile_width);
 
 		return {
-			url: `${trickplay.base_url}${sheetIndex}.jpg?api_key=${streamInfo.api_key}`,
+			url: `${trickplay.base_url}${sheetIndex}.jpg`,
 			bgPosition: `-${col * thumbPixelW * scale}px -${row * thumbPixelH * scale}px`,
 			bgSize: `${sheetPixelW * scale}px ${sheetPixelH * scale}px`,
 		};
