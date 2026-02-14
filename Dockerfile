@@ -20,10 +20,10 @@ COPY backend/ ./
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/build ./frontend-build
 
-# Create data directory for SQLite
-RUN mkdir -p /data
+# Create config directory for SQLite
+RUN mkdir -p /config
 
-ENV TITANTRON_DB_PATH=/data/titantron.db
+ENV TITANTRON_DB_PATH=/config/titantron.db
 ENV TITANTRON_FRONTEND_DIR=/app/frontend-build
 ENV TITANTRON_LOG_LEVEL=info
 

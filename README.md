@@ -15,15 +15,15 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - titantron-data:/data
-      - /path/to/wrestling/library:/media:ro
+      - titantron-config:/config
+      - /path/to/wrestling/library:/data:ro
     environment:
       - TITANTRON_LOG_LEVEL=info
       # - TITANTRON_ADMIN_PASSWORD=your-password-here
     restart: unless-stopped
 
 volumes:
-  titantron-data:
+  titantron-config:
 ```
 
 Replace `/path/to/wrestling/library` with the path to your Jellyfin wrestling library on the host.
@@ -36,7 +36,7 @@ docker compose up -d
 
 The app runs on port **8765**. Open `http://your-server:8765` and follow the setup wizard.
 
-The SQLite database is stored in a Docker volume at `/data/titantron.db` and persists across container restarts.
+The SQLite database is stored in a Docker volume at `/config/titantron.db` and persists across container restarts.
 
 ## Development Setup
 

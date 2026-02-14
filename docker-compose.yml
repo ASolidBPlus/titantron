@@ -4,13 +4,13 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - titantron-data:/data
+      - titantron-config:/config
     env_file:
       - .env
     environment:
-      - TITANTRON_DB_PATH=/data/titantron.db
+      - TITANTRON_DB_PATH=/config/titantron.db
       - TITANTRON_FRONTEND_DIR=/app/frontend-build
     restart: unless-stopped
 
 volumes:
-  titantron-data:
+  titantron-config:
