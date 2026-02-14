@@ -11,6 +11,7 @@
 		currentTimeTicks: number;
 		onSeekTo: (ticks: number) => void;
 		onAcceptChapter: (ticks: number, title: string) => void;
+		onDetectionsReady?: (detections: Detection[]) => void;
 	}
 
 	let {
@@ -21,6 +22,7 @@
 		currentTimeTicks,
 		onSeekTo,
 		onAcceptChapter,
+		onDetectionsReady,
 	}: Props = $props();
 
 	let status = $state<AnalysisStatus>({ status: 'none' });
@@ -51,6 +53,13 @@
 			? [...results.visual, ...results.audio].sort((a, b) => a.timestamp_ticks - b.timestamp_ticks)
 			: []
 	);
+
+	// Notify parent when detections change
+	$effect(() => {
+		if (allDetections.length > 0) {
+			onDetectionsReady?.(allDetections);
+		}
+	});
 
 	// Generate thumbnail data for rendering
 	function getThumbnailStyle(thumbIndex: number): { url: string; bgPosition: string; bgSize: string } {
@@ -329,10 +338,9 @@
 				{/each}
 
 				<!-- Current playback position -->
-				{@const playbackPx = (currentTimeTicks / durationTicks) * filmstripWidth}
 				<div
 					class="absolute top-0 w-0.5 bg-titan-accent z-20 pointer-events-none"
-					style="left: {playbackPx}px; height: {displayH}px"
+					style="left: {(currentTimeTicks / durationTicks) * filmstripWidth}px; height: {displayH}px"
 				></div>
 
 				<!-- Marker info bar at bottom -->
