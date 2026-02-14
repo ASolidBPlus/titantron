@@ -134,7 +134,7 @@ export function getSyncStatus(): Promise<SyncStatus> {
 }
 
 // Browse
-import type { Promotion, Event, EventDetail, EventComment, VideoItem, MatchCandidate, MatchStatus, PlayerInfo, Chapter, WrestlerProfile, WrestlerMatchHistory, SearchResults } from '$lib/types';
+import type { Promotion, Event, EventDetail, EventComment, VideoItem, MatchCandidate, MatchStatus, PlayerInfo, Chapter, WrestlerProfile, WrestlerMatchHistory, SearchResults, AnalysisStatus, AnalysisResults } from '$lib/types';
 
 export function getPromotions(): Promise<Promotion[]> {
 	return request('/browse/promotions');
@@ -303,4 +303,21 @@ export function adminLogin(password: string): Promise<{ success: boolean }> {
 
 export function adminLogout(): Promise<{ success: boolean }> {
 	return request('/admin/logout', { method: 'POST' });
+}
+
+// Analysis
+export function startAnalysis(videoId: number): Promise<{ message: string }> {
+	return request(`/player/${videoId}/analyze`, { method: 'POST' });
+}
+
+export function getAnalysisStatus(videoId: number): Promise<AnalysisStatus> {
+	return request(`/player/${videoId}/analyze/status`);
+}
+
+export function getAnalysisResults(videoId: number): Promise<AnalysisResults> {
+	return request(`/player/${videoId}/analyze/results`);
+}
+
+export function clearAnalysis(videoId: number): Promise<{ success: boolean }> {
+	return request(`/player/${videoId}/analyze`, { method: 'DELETE' });
 }

@@ -176,6 +176,26 @@ export interface SearchResults {
 	}[];
 }
 
+export interface Detection {
+	timestamp_ticks: number;
+	confidence: number;
+	type: 'scene_change' | 'bell' | 'music_start';
+}
+
+export interface AnalysisStatus {
+	status: 'none' | 'running_visual' | 'running_audio' | 'completed' | 'failed';
+	progress?: number;
+	total_steps?: number;
+	message?: string;
+	error?: string;
+}
+
+export interface AnalysisResults {
+	visual: Detection[];
+	audio: Detection[];
+	completed_at: string | null;
+}
+
 export interface TrickplayInfo {
 	resolution: number;
 	width: number;
