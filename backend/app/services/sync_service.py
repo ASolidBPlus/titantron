@@ -100,8 +100,6 @@ async def sync_library(db: AsyncSession, library_id: int, jellyfin: JellyfinClie
                 existing.date_added = date_added
                 existing.extracted_date = extracted
                 existing.media_source_id = item.media_source_id
-                existing.has_trickplay = item.has_trickplay
-                existing.image_tag = item.image_tag
             else:
                 video = VideoItem(
                     jellyfin_item_id=item.id,
@@ -113,8 +111,6 @@ async def sync_library(db: AsyncSession, library_id: int, jellyfin: JellyfinClie
                     date_added=date_added,
                     extracted_date=extracted,
                     media_source_id=item.media_source_id,
-                    has_trickplay=item.has_trickplay,
-                    image_tag=item.image_tag,
                     library_id=library.id,
                     match_status="unmatched",
                 )

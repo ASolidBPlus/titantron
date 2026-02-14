@@ -9,7 +9,7 @@ from app.models.event import Event
 from app.models.library import Library
 from app.models.promotion import Promotion
 from app.models.video_item import VideoItem
-from app.routers.browse import _jellyfin_base_url, _poster_url
+from app.routers.browse import _jellyfin_public_url, _poster_url
 from app.services.cagematch_scraper import CagematchScraper
 from app.services.matching_engine import (
     find_candidates,
@@ -125,7 +125,7 @@ async def list_library_videos(
     result = await db.execute(query)
     videos = result.scalars().all()
 
-    base_url = _jellyfin_base_url()
+    base_url = _jellyfin_public_url()
     items = []
     for v in videos:
         item = {
@@ -138,7 +138,7 @@ async def list_library_videos(
             "match_confidence": v.match_confidence,
             "matched_event_id": v.matched_event_id,
             "matched_event_name": None,
-            "poster_url": _poster_url(v.jellyfin_item_id, v.image_tag, base_url),
+            "poster_url": _poster_url(v.jellyfin_item_id, base_url),
         }
         if v.matched_event_id:
             ev_result = await db.execute(

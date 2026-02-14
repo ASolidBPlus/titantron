@@ -32,8 +32,6 @@ class ItemSummary:
     date_created: str | None
     duration_ticks: int | None
     media_source_id: str | None
-    has_trickplay: bool
-    image_tag: str | None
 
 
 class JellyfinClient:
@@ -109,7 +107,7 @@ class JellyfinClient:
         params = {
             "ParentId": parent_id,
             "IncludeItemTypes": "Movie,Video",
-            "Fields": "Path,MediaSources,DateCreated,PremiereDate,ImageTags,PrimaryImageAspectRatio,Trickplay",
+            "Fields": "Path,MediaSources,DateCreated,PremiereDate",
             "Recursive": "true",
             "SortBy": "PremiereDate,SortName",
             "SortOrder": "Descending",
@@ -125,13 +123,6 @@ class JellyfinClient:
             media_source_id = None
             if item.get("MediaSources"):
                 media_source_id = item["MediaSources"][0].get("Id")
-            has_trickplay = bool(item.get("Trickplay"))
-            image_tag = item.get("ImageTags", {}).get("Primary")
-            # Only keep image_tag for real posters (portrait aspect ratio),
-            # not auto-generated video thumbnails (landscape)
-            aspect_ratio = item.get("PrimaryImageAspectRatio")
-            if image_tag and aspect_ratio and aspect_ratio >= 1.0:
-                image_tag = None
             items.append(
                 ItemSummary(
                     id=item["Id"],
@@ -142,8 +133,6 @@ class JellyfinClient:
                     date_created=item.get("DateCreated"),
                     duration_ticks=item.get("RunTimeTicks"),
                     media_source_id=media_source_id,
-                    has_trickplay=has_trickplay,
-                    image_tag=image_tag,
                 )
             )
         return items, total

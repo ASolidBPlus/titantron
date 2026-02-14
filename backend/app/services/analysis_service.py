@@ -74,42 +74,41 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
 
             # --- Visual scene detection ---
             visual_detections: list[dict] = []
-            if video.has_trickplay:
-                try:
-                    detail = await client.get_item_detail(video.jellyfin_item_id)
-                    tp = detail.get("Trickplay", {})
-                    trickplay_meta = None
-                    for media_id, resolutions in tp.items():
-                        for res_str, meta in resolutions.items():
-                            trickplay_meta = {
-                                "resolution": int(res_str),
-                                "width": meta["Width"],
-                                "height": meta["Height"],
-                                "tile_width": meta["TileWidth"],
-                                "tile_height": meta["TileHeight"],
-                                "thumbnail_count": meta["ThumbnailCount"],
-                                "interval": meta["Interval"],
-                            }
-                            break
+            try:
+                detail = await client.get_item_detail(video.jellyfin_item_id)
+                tp = detail.get("Trickplay", {})
+                trickplay_meta = None
+                for media_id, resolutions in tp.items():
+                    for res_str, meta in resolutions.items():
+                        trickplay_meta = {
+                            "resolution": int(res_str),
+                            "width": meta["Width"],
+                            "height": meta["Height"],
+                            "tile_width": meta["TileWidth"],
+                            "tile_height": meta["TileHeight"],
+                            "thumbnail_count": meta["ThumbnailCount"],
+                            "interval": meta["Interval"],
+                        }
                         break
+                    break
 
-                    if trickplay_meta:
-                        def on_visual_progress(current: int, total: int):
-                            _analysis_progress[video_id].update({
-                                "progress": current,
-                                "total_steps": total,
-                                "message": f"Analyzing trickplay sheets ({current}/{total})...",
-                            })
+                if trickplay_meta:
+                    def on_visual_progress(current: int, total: int):
+                        _analysis_progress[video_id].update({
+                            "progress": current,
+                            "total_steps": total,
+                            "message": f"Analyzing trickplay sheets ({current}/{total})...",
+                        })
 
-                        visual_detections = await detect_visual_transitions(
-                            client, video.jellyfin_item_id, trickplay_meta,
-                            on_progress=on_visual_progress,
-                        )
-                except Exception as e:
-                    logger.error(f"Visual detection failed: {e}")
-                    _analysis_progress[video_id]["message"] = f"Visual detection failed: {e}"
-            else:
-                logger.info(f"Video {video_id} has no trickplay data, skipping visual detection")
+                    visual_detections = await detect_visual_transitions(
+                        client, video.jellyfin_item_id, trickplay_meta,
+                        on_progress=on_visual_progress,
+                    )
+                else:
+                    logger.info(f"Video {video_id} has no trickplay data, skipping visual detection")
+            except Exception as e:
+                logger.error(f"Visual detection failed: {e}")
+                _analysis_progress[video_id]["message"] = f"Visual detection failed: {e}"
 
             # Save visual results
             analysis.visual_detections = json.dumps(visual_detections)

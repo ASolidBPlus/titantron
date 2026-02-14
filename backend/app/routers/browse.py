@@ -12,25 +12,26 @@ from app.models.match import Match, MatchParticipant
 from app.models.promotion import Promotion
 from app.models.video_item import VideoItem
 from app.models.wrestler import Wrestler
+from app.config import settings
 from app.routers.auth import _load_connection
 from app.services.cagematch_scraper import CagematchScraper
 
 
-def _jellyfin_base_url() -> str:
-    """Get the Jellyfin server base URL from the stored connection."""
+def _jellyfin_public_url() -> str:
+    """Get the public-facing Jellyfin URL for browser-accessible resources."""
+    if settings.jellyfin_public_url:
+        return settings.jellyfin_public_url.rstrip("/")
     conn = _load_connection()
     return conn.get("url", "")
 
 
-def _poster_url(jellyfin_item_id: str, image_tag: str | None, base_url: str | None = None) -> str | None:
-    """Build a Jellyfin poster URL if the video has an image tag."""
-    if not image_tag:
-        return None
+def _poster_url(jellyfin_item_id: str, base_url: str | None = None) -> str | None:
+    """Build a Jellyfin poster URL. Always returns a URL — Jellyfin returns 404 if no image."""
     if base_url is None:
-        base_url = _jellyfin_base_url()
+        base_url = _jellyfin_public_url()
     if not base_url:
         return None
-    return f"{base_url}/Items/{jellyfin_item_id}/Images/Primary?tag={image_tag}&maxWidth=400&quality=90"
+    return f"{base_url}/Items/{jellyfin_item_id}/Images/Primary?maxWidth=400&quality=90"
 
 router = APIRouter()
 
@@ -154,7 +155,7 @@ async def get_event_detail(
     )
     promotion = promo_result.scalar_one_or_none()
 
-    base_url = _jellyfin_base_url()
+    base_url = _jellyfin_public_url()
 
     return {
         "id": event.id,
@@ -204,7 +205,7 @@ async def get_event_detail(
                 "title": v.title,
                 "match_status": v.match_status,
                 "match_confidence": v.match_confidence,
-                "poster_url": _poster_url(v.jellyfin_item_id, v.image_tag, base_url),
+                "poster_url": _poster_url(v.jellyfin_item_id, base_url),
             }
             for v in videos
         ],
