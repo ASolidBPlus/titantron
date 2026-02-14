@@ -17,13 +17,18 @@ GH_API="https://api.github.com/repos/ASolidBPlus/titantron/actions/runs?per_page
 
 echo "Waiting for CI build..." >&2
 
-# Poll GitHub Actions until build completes (max 5 min)
+# Get the current HEAD commit so we wait for the right run
+HEAD_SHA=$(git -C /home/joelle/Documents/code/titantron rev-parse HEAD 2>/dev/null)
+
+# Poll GitHub Actions until build for THIS commit completes (max 5 min)
 for i in $(seq 1 20); do
     RESULT=$(curl -sf -H "Accept: application/vnd.github+json" "$GH_API" 2>/dev/null)
+    RUN_SHA=$(echo "$RESULT" | jq -r '.workflow_runs[0].head_sha // "none"')
     STATUS=$(echo "$RESULT" | jq -r '.workflow_runs[0].status // "unknown"')
     CONCLUSION=$(echo "$RESULT" | jq -r '.workflow_runs[0].conclusion // "null"')
 
-    if [ "$STATUS" = "completed" ]; then
+    # Only act on the run for our commit
+    if [ "$RUN_SHA" = "$HEAD_SHA" ] && [ "$STATUS" = "completed" ]; then
         if [ "$CONCLUSION" != "success" ]; then
             echo "CI build failed ($CONCLUSION) — skipping deploy" >&2
             exit 2
