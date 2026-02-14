@@ -409,11 +409,11 @@ async def playback_stopped(
 # --- Trickplay proxy ---
 
 
-@router.get("/{video_id}/trickplay/{resolution}/{index}")
+@router.get("/{video_id}/trickplay/{resolution}/{filename}")
 async def get_trickplay_tile(
     video_id: int,
     resolution: int,
-    index: int,
+    filename: str,
     db: AsyncSession = Depends(get_db),
     client: JellyfinClient = Depends(get_jellyfin_client),
 ):
@@ -421,7 +421,8 @@ async def get_trickplay_tile(
     video = await db.get(VideoItem, video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    # filename arrives as e.g. "46185.jpg" — pass through to Jellyfin as-is
     data = await client._request_bytes(
-        f"/Videos/{video.jellyfin_item_id}/Trickplay/{resolution}/{index}.jpg"
+        f"/Videos/{video.jellyfin_item_id}/Trickplay/{resolution}/{filename}"
     )
     return Response(content=data, media_type="image/jpeg")
