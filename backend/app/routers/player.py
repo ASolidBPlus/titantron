@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models.chapter import Chapter
 from app.models.event import Event
@@ -94,6 +95,10 @@ async def get_player_info(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
+    # Public URL for client-facing URLs (stream, trickplay)
+    # Backend still uses client.server_url for API calls
+    public_url = settings.jellyfin_public_url.rstrip("/") if settings.jellyfin_public_url else client.server_url
+
     # Ask Jellyfin for optimal playback method (direct play vs transcode)
     play_session_id = str(uuid.uuid4())
     playback_info = await client.get_playback_info(
@@ -111,7 +116,7 @@ async def get_player_info(
         if ms.get("SupportsDirectPlay") or ms.get("SupportsDirectStream"):
             # Direct play/stream — serve the file as-is or remuxed
             stream_url = (
-                f"{client.server_url}/Videos/{video.jellyfin_item_id}/stream"
+                f"{public_url}/Videos/{video.jellyfin_item_id}/stream"
                 f"?static=true"
                 f"&MediaSourceId={video.media_source_id}"
                 f"&api_key={client.access_token}"
@@ -120,13 +125,13 @@ async def get_player_info(
             )
         elif transcode_url:
             # Jellyfin provides a transcoding URL (HLS)
-            stream_url = f"{client.server_url}{transcode_url}"
+            stream_url = f"{public_url}{transcode_url}"
             is_hls = True
 
     if not stream_url:
         # Fallback: direct stream
         stream_url = (
-            f"{client.server_url}/Videos/{video.jellyfin_item_id}/stream"
+            f"{public_url}/Videos/{video.jellyfin_item_id}/stream"
             f"?static=true"
             f"&MediaSourceId={video.media_source_id}"
             f"&api_key={client.access_token}"
@@ -150,7 +155,7 @@ async def get_player_info(
                         "tile_height": meta["TileHeight"],
                         "thumbnail_count": meta["ThumbnailCount"],
                         "interval": meta["Interval"],
-                        "base_url": f"{client.server_url}/Videos/{video.jellyfin_item_id}/Trickplay/{res_str}/",
+                        "base_url": f"{public_url}/Videos/{video.jellyfin_item_id}/Trickplay/{res_str}/",
                     }
                     break
                 break
@@ -225,7 +230,7 @@ async def get_player_info(
             "is_hls": is_hls,
             "play_session_id": play_session_id,
             "api_key": client.access_token,
-            "server_url": client.server_url,
+            "server_url": public_url,
         },
         "trickplay": trickplay_data,
         "chapters": chapters,

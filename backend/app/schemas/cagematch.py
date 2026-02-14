@@ -7,6 +7,8 @@ class ConfigureLibraryRequest(BaseModel):
     cagematch_promotion_id: int
     promotion_name: str
     promotion_abbreviation: str = ""
+    jellyfin_path: str = ""
+    local_path: str = ""
 
 
 class ConfiguredLibraryResponse(BaseModel):
@@ -18,6 +20,8 @@ class ConfiguredLibraryResponse(BaseModel):
     promotion_abbreviation: str
     video_count: int
     last_synced: str | None
+    jellyfin_path: str | None = None
+    local_path: str | None = None
 
 
 class SyncStatusResponse(BaseModel):

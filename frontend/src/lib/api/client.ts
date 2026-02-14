@@ -83,6 +83,8 @@ export interface ConfiguredLibrary {
 	promotion_abbreviation: string;
 	video_count: number;
 	last_synced: string | null;
+	jellyfin_path: string | null;
+	local_path: string | null;
 }
 
 export interface ConfigureLibraryRequest {
@@ -91,6 +93,8 @@ export interface ConfigureLibraryRequest {
 	cagematch_promotion_id: number;
 	promotion_name: string;
 	promotion_abbreviation: string;
+	jellyfin_path?: string;
+	local_path?: string;
 }
 
 export function getJellyfinLibraries(): Promise<JellyfinLibrary[]> {

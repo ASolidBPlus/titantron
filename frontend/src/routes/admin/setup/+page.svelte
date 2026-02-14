@@ -33,6 +33,8 @@
 	let promotionId = $state('');
 	let promotionName = $state('');
 	let promotionAbbr = $state('');
+	let jellyfinPathInput = $state('');
+	let localPathInput = $state('');
 
 	// Sync
 	let syncStatusData = $state<SyncStatus | null>(null);
@@ -84,12 +86,16 @@
 				jellyfin_library_name: lib?.name ?? 'Unknown',
 				cagematch_promotion_id: parseInt(promotionId),
 				promotion_name: promotionName,
-				promotion_abbreviation: promotionAbbr
+				promotion_abbreviation: promotionAbbr,
+				jellyfin_path: jellyfinPathInput || undefined,
+				local_path: localPathInput || undefined
 			});
 			selectedLibraryId = '';
 			promotionId = '';
 			promotionName = '';
 			promotionAbbr = '';
+			jellyfinPathInput = '';
+			localPathInput = '';
 			await loadLibraries();
 		} catch (e: any) {
 			error = e.message || 'Failed to add library';
@@ -322,6 +328,37 @@
 								Find the ID in the Cagematch URL: cagematch.net/?id=8&nr=<strong>ID</strong>
 							</p>
 						</div>
+						<!-- Path Mapping (optional, for Docker audio analysis) -->
+						<details class="group">
+							<summary class="text-sm text-titan-text-muted cursor-pointer hover:text-titan-text">
+								Path Mapping (optional)
+							</summary>
+							<div class="mt-2 space-y-3 pl-2 border-l-2 border-titan-border">
+								<div>
+									<label for="jellyfin-path" class="block text-sm text-titan-text-muted mb-1">Jellyfin Library Path</label>
+									<input
+										id="jellyfin-path"
+										type="text"
+										bind:value={jellyfinPathInput}
+										placeholder="/data/wrestling"
+										class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-titan-text placeholder:text-titan-text-muted/50 focus:outline-none focus:border-titan-accent"
+									/>
+								</div>
+								<div>
+									<label for="local-path" class="block text-sm text-titan-text-muted mb-1">Local Mount Path</label>
+									<input
+										id="local-path"
+										type="text"
+										bind:value={localPathInput}
+										placeholder="/media"
+										class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-titan-text placeholder:text-titan-text-muted/50 focus:outline-none focus:border-titan-accent"
+									/>
+								</div>
+								<p class="text-xs text-titan-text-muted">
+									Maps Jellyfin file paths to local Docker mount for audio analysis.
+								</p>
+							</div>
+						</details>
 						<button
 							type="submit"
 							disabled={loading || !selectedLibraryId || !promotionId || !promotionName}

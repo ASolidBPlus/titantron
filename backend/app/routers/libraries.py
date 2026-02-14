@@ -36,6 +36,8 @@ async def list_configured_libraries(db: AsyncSession = Depends(get_db)):
             Library.jellyfin_library_id,
             Library.name,
             Library.promotion_id,
+            Library.jellyfin_path,
+            Library.local_path,
             Promotion.name.label("promotion_name"),
             Promotion.abbreviation.label("promotion_abbreviation"),
             func.count(VideoItem.id).label("video_count"),
@@ -57,6 +59,8 @@ async def list_configured_libraries(db: AsyncSession = Depends(get_db)):
             promotion_abbreviation=row.promotion_abbreviation or "",
             video_count=row.video_count,
             last_synced=row.last_synced.isoformat() if row.last_synced else None,
+            jellyfin_path=row.jellyfin_path,
+            local_path=row.local_path,
         )
         for row in rows
     ]
@@ -90,6 +94,8 @@ async def configure_library(request: ConfigureLibraryRequest, db: AsyncSession =
         jellyfin_library_id=request.jellyfin_library_id,
         name=request.jellyfin_library_name,
         promotion_id=promotion.id,
+        jellyfin_path=request.jellyfin_path or None,
+        local_path=request.local_path or None,
     )
     db.add(library)
     await db.commit()
@@ -104,6 +110,8 @@ async def configure_library(request: ConfigureLibraryRequest, db: AsyncSession =
         promotion_abbreviation=promotion.abbreviation or "",
         video_count=0,
         last_synced=None,
+        jellyfin_path=library.jellyfin_path,
+        local_path=library.local_path,
     )
 
 

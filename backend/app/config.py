@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     jellyfin_token: str = ""
     jellyfin_user_id: str = ""
     jellyfin_device_id: str = ""
+    jellyfin_public_url: str = ""  # Client-facing URL (if different from jellyfin_url)
 
     # Admin
     admin_password: str = ""

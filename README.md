@@ -16,7 +16,7 @@ services:
       - "8765:8765"
     volumes:
       - titantron-config:/config
-      - /path/to/wrestling/library:/data:ro
+      - /path/to/wrestling/library:/media:ro
     environment:
       - TITANTRON_LOG_LEVEL=info
       # - TITANTRON_ADMIN_PASSWORD=your-password-here
