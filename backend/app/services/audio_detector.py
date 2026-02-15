@@ -24,7 +24,8 @@ BELL_CLUSTER_WINDOW_SECS = 30
 BELL_MIN_CLUSTER = 2
 
 # Music detection params
-MUSIC_ENERGY_THRESHOLD = 1.5  # multiplier over previous window energy
+MUSIC_SUB_WINDOW_SECS = 2  # sub-window size for music energy comparison
+MUSIC_ENERGY_THRESHOLD = 1.5  # multiplier over rolling baseline
 MUSIC_MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds
 
 # Timeout for entire audio analysis pipeline
@@ -119,35 +120,53 @@ def _detect_bells_in_chunk(
 
 
 def _detect_music_in_chunk(
-    samples: np.ndarray, prev_energy: float, chunk_offset_secs: float
+    samples: np.ndarray, music_baseline: float, chunk_offset_secs: float
 ) -> tuple[list[dict], float]:
-    """Detect music starts by comparing broadband energy to previous chunk."""
-    current_energy = _rms(samples)
-
+    """
+    Detect music starts using 2-second sub-windows compared against a
+    rolling baseline. Returns (detections, updated_baseline).
+    Timestamps pinpoint the sub-window where energy first spikes.
+    """
+    sub_window_samples = SAMPLE_RATE * MUSIC_SUB_WINDOW_SECS
     detections = []
-    if prev_energy > 0:
-        ratio = current_energy / prev_energy
-        if ratio > MUSIC_ENERGY_THRESHOLD:
-            ticks = int(chunk_offset_secs * TICKS_PER_SECOND)
+    updated_baseline = music_baseline
 
-            # Check spectral flatness (music has more harmonic structure)
-            fft_vals = np.abs(rfft(samples.astype(np.float64)))
-            if len(fft_vals) > 0:
-                geo_mean = np.exp(np.mean(np.log(fft_vals + 1e-10)))
-                arith_mean = np.mean(fft_vals)
-                flatness = geo_mean / arith_mean if arith_mean > 0 else 0
+    for i in range(0, len(samples), sub_window_samples):
+        window = samples[i : i + sub_window_samples]
+        if len(window) < SAMPLE_RATE:  # skip < 1 second
+            break
 
-                # Lower flatness = more tonal/musical (not just noise)
-                if flatness < 0.6:
-                    confidence = min(0.85, (ratio - MUSIC_ENERGY_THRESHOLD) * 0.3)
-                    confidence = max(0.1, confidence)
-                    detections.append({
-                        "timestamp_ticks": ticks,
-                        "confidence": round(confidence, 3),
-                        "type": "music_start",
-                    })
+        window_energy = _rms(window)
+        sub_offset_secs = chunk_offset_secs + (i / SAMPLE_RATE)
 
-    return detections, current_energy
+        if updated_baseline > 0:
+            ratio = window_energy / updated_baseline
+            if ratio > MUSIC_ENERGY_THRESHOLD:
+                # Spectral flatness check on this sub-window
+                fft_vals = np.abs(rfft(window.astype(np.float64)))
+                if len(fft_vals) > 0:
+                    geo_mean = np.exp(np.mean(np.log(fft_vals + 1e-10)))
+                    arith_mean = np.mean(fft_vals)
+                    flatness = geo_mean / arith_mean if arith_mean > 0 else 0
+
+                    if flatness < 0.6:
+                        ticks = int(sub_offset_secs * TICKS_PER_SECOND)
+                        confidence = min(0.85, (ratio - MUSIC_ENERGY_THRESHOLD) * 0.3)
+                        confidence = max(0.1, confidence)
+                        detections.append({
+                            "timestamp_ticks": ticks,
+                            "confidence": round(confidence, 3),
+                            "type": "music_start",
+                        })
+
+        # Update rolling baseline (EMA, slow adaptation so music doesn't
+        # become the new baseline immediately)
+        if updated_baseline == 0:
+            updated_baseline = window_energy
+        else:
+            updated_baseline = 0.05 * window_energy + 0.95 * updated_baseline
+
+    return detections, updated_baseline
 
 
 def _cluster_bell_hits(detections: list[dict]) -> list[dict]:
@@ -245,7 +264,7 @@ async def _run_audio_pipeline(
 
     sos = _design_bandpass(BELL_LOW_HZ, BELL_HIGH_HZ, SAMPLE_RATE)
     all_detections: list[dict] = []
-    prev_energy = 0.0
+    music_baseline = 0.0
     chunk_idx = 0
 
     # Rolling baseline for bell detection (exponential moving average of bandpass RMS)
@@ -285,9 +304,9 @@ async def _run_audio_pipeline(
             total_bell_candidates += candidates
             total_bell_passed += passed
 
-            # Music start detection
-            music_hits, prev_energy = _detect_music_in_chunk(
-                samples, prev_energy, chunk_offset_secs
+            # Music start detection (2-second sub-windows with rolling baseline)
+            music_hits, music_baseline = _detect_music_in_chunk(
+                samples, music_baseline, chunk_offset_secs
             )
             all_detections.extend(music_hits)
 
