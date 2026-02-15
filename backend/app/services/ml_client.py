@@ -22,12 +22,12 @@ def _get_ml_url() -> str:
     return get_setting("ml_service_url") or ""
 
 
-async def check_ml_available() -> dict:
+async def check_ml_available(url: str | None = None) -> dict:
     """Check if ML container is reachable and model is loaded.
 
     Returns dict with 'available' and 'model_loaded' keys.
     """
-    url = _get_ml_url()
+    url = url or _get_ml_url()
     if not url:
         return {"available": False, "model_loaded": False}
 

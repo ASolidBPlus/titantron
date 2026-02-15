@@ -151,7 +151,7 @@
 		mlTesting = true;
 		mlHealth = null;
 		try {
-			mlHealth = await testMLConnection();
+			mlHealth = await testMLConnection(mlServiceUrl);
 		} catch {
 			mlHealth = { available: false, model_loaded: false };
 		} finally {

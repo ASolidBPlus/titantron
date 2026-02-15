@@ -72,7 +72,7 @@ async def update_app_settings(body: SettingsUpdate):
 
 
 @router.get("/ml/health")
-async def test_ml_connection():
+async def test_ml_connection(url: str | None = None):
     """Test connection to the ML sidecar container."""
-    result = await check_ml_available()
+    result = await check_ml_available(url=url)
     return result

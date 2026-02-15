@@ -365,8 +365,9 @@ export interface MLHealthStatus {
 	device?: string;
 }
 
-export function testMLConnection(): Promise<MLHealthStatus> {
-	return request('/admin/ml/health');
+export function testMLConnection(url?: string): Promise<MLHealthStatus> {
+	const params = url ? `?url=${encodeURIComponent(url)}` : '';
+	return request(`/admin/ml/health${params}`);
 }
 
 // Analysis
