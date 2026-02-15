@@ -258,12 +258,16 @@ async def _run_analysis_pipeline(
                     )
                 else:
                     try:
-                        def on_audio_progress(current: int, total: int):
-                            _analysis_progress[video_id].update({
+                        def on_audio_progress(current: int, total: int, message: str | None = None):
+                            update = {
                                 "progress": current,
                                 "total_steps": total,
-                                "message": f"Analyzing audio ({current}/{total}s)...",
-                            })
+                            }
+                            if message:
+                                update["message"] = message
+                            else:
+                                update["message"] = f"Analyzing audio ({current}/{total}s)..."
+                            _analysis_progress[video_id].update(update)
 
                         audio_detections = await classify_audio(
                             local_path,

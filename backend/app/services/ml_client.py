@@ -53,7 +53,7 @@ async def check_ml_available(url: str | None = None) -> dict:
 async def classify_audio(
     local_path: str,
     duration_ticks: int,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Callable[..., None] | None = None,
 ) -> list[dict]:
     """Extract audio via ffmpeg and send to ML container for classification.
 
@@ -63,26 +63,21 @@ async def classify_audio(
     if not url:
         raise RuntimeError("ML service URL not configured")
 
-    # Step 1: Extract audio to raw PCM float32 mono 32kHz via ffmpeg
     duration_secs = duration_ticks / TICKS if duration_ticks else 0
-    total_steps = max(1, int(duration_secs))
 
+    # Step 1: Extract audio via ffmpeg
     if on_progress:
-        on_progress(0, total_steps)
+        on_progress(1, 3, "Extracting audio from video...")
 
     logger.info(f"Extracting audio from {local_path} (PCM float32 32kHz mono)")
-
     pcm_data = await _extract_audio(local_path)
+    pcm_mb = len(pcm_data) / 1024 / 1024
 
+    # Step 2: Send to ML container
     if on_progress:
-        on_progress(total_steps // 4, total_steps)
+        on_progress(2, 3, f"Sending audio to ML service ({pcm_mb:.0f}MB)...")
 
-    logger.info(f"Audio extracted: {len(pcm_data) / 1024 / 1024:.1f}MB, sending to ML service")
-
-    # Step 2: POST raw PCM to ML container
-    if on_progress:
-        on_progress(total_steps // 2, total_steps)
-
+    logger.info(f"Audio extracted: {pcm_mb:.1f}MB, sending to ML service")
     window_secs = get_setting("ml_window_secs") or 30
 
     async with aiohttp.ClientSession() as session:
@@ -97,10 +92,11 @@ async def classify_audio(
                 raise RuntimeError(f"ML classification failed: HTTP {resp.status} — {text}")
             result = await resp.json()
 
-    if on_progress:
-        on_progress(total_steps, total_steps)
-
+    # Step 3: Done
     detections = result.get("detections", [])
+    if on_progress:
+        on_progress(3, 3, f"ML classification complete: {len(detections)} detections")
+
     logger.info(f"ML classification returned {len(detections)} detections")
     return detections
 
