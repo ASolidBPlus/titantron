@@ -112,6 +112,13 @@ export function configureLibrary(data: ConfigureLibraryRequest): Promise<Configu
 	});
 }
 
+export function updateLibrary(id: number, data: { jellyfin_path?: string; local_path?: string }): Promise<ConfiguredLibrary> {
+	return request(`/libraries/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(data)
+	});
+}
+
 export function deleteLibrary(id: number): Promise<void> {
 	return request(`/libraries/${id}`, { method: 'DELETE' });
 }

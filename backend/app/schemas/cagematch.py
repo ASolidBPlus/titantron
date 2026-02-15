@@ -24,6 +24,11 @@ class ConfiguredLibraryResponse(BaseModel):
     local_path: str | None = None
 
 
+class UpdateLibraryRequest(BaseModel):
+    jellyfin_path: str | None = None
+    local_path: str | None = None
+
+
 class SyncStatusResponse(BaseModel):
     is_running: bool
     library_id: int | None = None

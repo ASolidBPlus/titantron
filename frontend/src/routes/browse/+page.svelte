@@ -32,7 +32,7 @@
 	{:else if promotions.length === 0}
 		<div class="bg-titan-surface border border-titan-border rounded-lg p-6 text-center">
 			<p class="text-titan-text-muted">No promotions configured yet.</p>
-			<a href="/admin/setup" class="inline-block mt-3 px-4 py-2 bg-titan-accent rounded font-medium hover:opacity-90">
+			<a href="/admin/settings" class="inline-block mt-3 px-4 py-2 bg-titan-accent rounded font-medium hover:opacity-90">
 				Set Up Libraries
 			</a>
 		</div>

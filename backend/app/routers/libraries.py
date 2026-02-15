@@ -9,7 +9,7 @@ from app.models.library import Library
 from app.models.promotion import Promotion
 from app.models.video_item import VideoItem
 from app.routers.auth import get_jellyfin_client
-from app.schemas.cagematch import ConfigureLibraryRequest, ConfiguredLibraryResponse
+from app.schemas.cagematch import ConfigureLibraryRequest, ConfiguredLibraryResponse, UpdateLibraryRequest
 from app.services.jellyfin_client import JellyfinClient
 from app.services.sync_service import sync_library, sync_status
 
@@ -110,6 +110,48 @@ async def configure_library(request: ConfigureLibraryRequest, db: AsyncSession =
         promotion_abbreviation=promotion.abbreviation or "",
         video_count=0,
         last_synced=None,
+        jellyfin_path=library.jellyfin_path,
+        local_path=library.local_path,
+    )
+
+
+@router.patch("/{library_id}", response_model=ConfiguredLibraryResponse)
+async def update_library(library_id: int, body: UpdateLibraryRequest, db: AsyncSession = Depends(get_db)):
+    """Update a library's path mapping."""
+    result = await db.execute(select(Library).where(Library.id == library_id))
+    library = result.scalar_one_or_none()
+    if not library:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    if body.jellyfin_path is not None:
+        library.jellyfin_path = body.jellyfin_path or None
+    if body.local_path is not None:
+        library.local_path = body.local_path or None
+
+    await db.commit()
+    await db.refresh(library)
+
+    # Fetch promotion info for response
+    result = await db.execute(
+        select(
+            Promotion.name, Promotion.abbreviation,
+            func.count(VideoItem.id).label("video_count"),
+        )
+        .outerjoin(VideoItem, VideoItem.library_id == Library.id)
+        .where(Promotion.id == library.promotion_id)
+        .group_by(Promotion.id)
+    )
+    row = result.one()
+
+    return ConfiguredLibraryResponse(
+        id=library.id,
+        jellyfin_library_id=library.jellyfin_library_id,
+        name=library.name,
+        promotion_id=library.promotion_id,
+        promotion_name=row.name or "Unknown",
+        promotion_abbreviation=row.abbreviation or "",
+        video_count=row.video_count,
+        last_synced=library.last_synced.isoformat() if library.last_synced else None,
         jellyfin_path=library.jellyfin_path,
         local_path=library.local_path,
     )

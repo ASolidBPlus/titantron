@@ -12,11 +12,8 @@
 	let loggingIn = $state(false);
 
 	const tabs = [
-		{ href: '/admin', label: 'Dashboard' },
-		{ href: '/admin/matching', label: 'Matching' },
-		{ href: '/admin/setup', label: 'Setup' },
+		{ href: '/admin', label: 'Matching' },
 		{ href: '/admin/settings', label: 'Settings' },
-		{ href: '/admin/test-scrape', label: 'Test Scrape' },
 	];
 
 	function isActive(href: string): boolean {
@@ -113,7 +110,7 @@
 				</div>
 				<div class="flex items-center gap-3">
 					<a
-						href="/"
+						href="/browse"
 						class="text-xs text-titan-text-muted hover:text-titan-text transition-colors"
 					>&larr; Browse</a>
 					{#if required}
