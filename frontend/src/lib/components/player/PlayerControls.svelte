@@ -233,7 +233,7 @@
 					{#if detections.length > 0}
 						{#each detections as det}
 							{@const pct = duration > 0 ? (det.timestamp_ticks / 10_000_000 / duration) * 100 : 0}
-							{@const color = det.type === 'bell' ? '#f59e0b' : det.type === 'music_start' ? '#22c55e' : '#3b82f6'}
+							{@const color = { bell: '#f59e0b', music_start: '#22c55e', scene_change: '#3b82f6', dark_frame: '#6b7280', graphics_change: '#a855f7' }[det.type] || '#3b82f6'}
 							<div
 								class="absolute top-0 bottom-0 w-px opacity-50 pointer-events-none"
 								style="left: {pct}%; background-color: {color};"

@@ -14,10 +14,13 @@
 		syncLibrary,
 		getSyncStatus,
 		browseDirs,
+		startBatchAnalysis,
+		getBatchAnalysisStatus,
 		type JellyfinLibrary,
 		type ConfiguredLibrary,
 		type SyncStatus,
 		type BrowseDirsResult,
+		type BatchAnalysisStatus,
 	} from '$lib/api/client';
 
 	const API_BASE = '/api/v1';
@@ -91,6 +94,35 @@
 	let syncStatusData = $state<SyncStatus | null>(null);
 	let syncPolling = $state(false);
 	let syncingLibraryId = $state<number | null>(null);
+
+	// Batch analysis
+	let batchAnalyzingLibraryId = $state<number | null>(null);
+	let batchStatus = $state<BatchAnalysisStatus | null>(null);
+	let batchPolling = $state(false);
+
+	async function handleBatchAnalysis(libraryId: number) {
+		batchAnalyzingLibraryId = libraryId;
+		try {
+			await startBatchAnalysis(libraryId);
+			batchPolling = true;
+			while (batchPolling) {
+				await new Promise((r) => setTimeout(r, 2000));
+				try {
+					batchStatus = await getBatchAnalysisStatus(libraryId);
+					if (batchStatus.status !== 'running') {
+						batchPolling = false;
+					}
+				} catch {
+					batchPolling = false;
+				}
+			}
+		} catch (e: any) {
+			libraryError = e.message || 'Failed to start batch analysis';
+		} finally {
+			batchAnalyzingLibraryId = null;
+			batchStatus = null;
+		}
+	}
 
 	// Security
 	let newPassword = $state('');
@@ -492,8 +524,15 @@
 											</div>
 											<div class="flex items-center gap-2">
 												<button
+													onclick={() => handleBatchAnalysis(lib.id)}
+													disabled={batchAnalyzingLibraryId !== null || syncingLibraryId !== null}
+													class="text-xs px-3 py-1.5 bg-titan-surface border border-titan-border rounded hover:border-titan-accent disabled:opacity-50"
+												>
+													{batchAnalyzingLibraryId === lib.id ? 'Analyzing...' : 'Analyze All'}
+												</button>
+												<button
 													onclick={() => handleSync(lib.id)}
-													disabled={syncingLibraryId !== null}
+													disabled={syncingLibraryId !== null || batchAnalyzingLibraryId !== null}
 													class="text-xs px-3 py-1.5 bg-titan-surface border border-titan-border rounded hover:border-titan-accent disabled:opacity-50"
 												>
 													{syncingLibraryId === lib.id ? 'Syncing...' : 'Sync'}
@@ -520,6 +559,24 @@
 													</div>
 													<p class="text-xs text-titan-text-muted mt-1">
 														{syncStatusData.progress} / {syncStatusData.total}
+													</p>
+												{/if}
+											</div>
+										{/if}
+
+										<!-- Batch analysis progress -->
+										{#if batchAnalyzingLibraryId === lib.id && batchStatus?.status === 'running'}
+											<div class="mt-3 pt-3 border-t border-titan-border">
+												<p class="text-xs text-titan-text-muted">{batchStatus.message}</p>
+												{#if batchStatus.total}
+													<div class="mt-1 w-full bg-titan-surface rounded-full h-1.5">
+														<div
+															class="bg-titan-accent h-1.5 rounded-full transition-all"
+															style="width: {((batchStatus.progress ?? 0) / batchStatus.total) * 100}%"
+														></div>
+													</div>
+													<p class="text-xs text-titan-text-muted mt-1">
+														{(batchStatus.progress ?? 0)} / {batchStatus.total} videos
 													</p>
 												{/if}
 											</div>

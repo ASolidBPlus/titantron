@@ -3,15 +3,21 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.analysis_result import AnalysisResult
+from app.models.library import Library
 from app.models.video_item import VideoItem
 from app.routers.auth import get_jellyfin_client
-from app.services.analysis_service import get_analysis_progress, run_analysis
+from app.services.analysis_service import (
+    get_analysis_progress,
+    get_batch_progress,
+    run_analysis,
+    run_batch_analysis,
+)
 from app.services.jellyfin_client import JellyfinClient
 
 logger = logging.getLogger(__name__)
@@ -22,6 +28,7 @@ router = APIRouter()
 async def start_analysis(
     video_id: int,
     background_tasks: BackgroundTasks,
+    phase: str = Query("both", regex="^(both|visual|audio)$"),
     db: AsyncSession = Depends(get_db),
     client: JellyfinClient = Depends(get_jellyfin_client),
 ):
@@ -34,8 +41,8 @@ async def start_analysis(
     if progress and progress.get("status", "").startswith("running"):
         raise HTTPException(status_code=409, detail="Analysis already in progress")
 
-    background_tasks.add_task(run_analysis, video_id, client)
-    return {"message": "Analysis started"}
+    background_tasks.add_task(run_analysis, video_id, client, phase)
+    return {"message": f"Analysis started (phase: {phase})"}
 
 
 @router.get("/{video_id}/analyze/status")
@@ -102,3 +109,34 @@ async def clear_analysis(
         await db.delete(analysis)
         await db.commit()
     return {"success": True}
+
+
+@router.post("/libraries/{library_id}/analyze-all")
+async def start_batch_analysis(
+    library_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    client: JellyfinClient = Depends(get_jellyfin_client),
+):
+    """Trigger batch analysis for all unanalyzed videos in a library."""
+    library = await db.get(Library, library_id)
+    if not library:
+        raise HTTPException(status_code=404, detail="Library not found")
+
+    progress = get_batch_progress(library_id)
+    if progress and progress.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Batch analysis already in progress")
+
+    background_tasks.add_task(run_batch_analysis, library_id, client)
+    return {"message": "Batch analysis started"}
+
+
+@router.get("/libraries/{library_id}/analyze-all/status")
+async def get_batch_analysis_status(
+    library_id: int,
+):
+    """Poll batch analysis progress for a library."""
+    progress = get_batch_progress(library_id)
+    if not progress:
+        return {"status": "none"}
+    return progress

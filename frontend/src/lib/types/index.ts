@@ -179,7 +179,7 @@ export interface SearchResults {
 export interface Detection {
 	timestamp_ticks: number;
 	confidence: number;
-	type: 'scene_change' | 'bell' | 'music_start';
+	type: 'scene_change' | 'dark_frame' | 'graphics_change' | 'bell' | 'music_start';
 }
 
 export interface AnalysisStatus {

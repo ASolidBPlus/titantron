@@ -27,6 +27,9 @@ BELL_MIN_CLUSTER = 2  # minimum hits to boost confidence
 MUSIC_ENERGY_THRESHOLD = 2.0  # multiplier over previous window energy
 MUSIC_MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds
 
+# Timeout for entire audio analysis pipeline
+AUDIO_TIMEOUT_SECONDS = 300  # 5 minutes
+
 
 def _design_bandpass(low_hz: int, high_hz: int, fs: int, order: int = 4):
     """Design a Butterworth bandpass filter."""
@@ -199,16 +202,12 @@ def _cluster_music_detections(detections: list[dict]) -> list[dict]:
     return result + others
 
 
-async def detect_audio_events(
+async def _run_audio_pipeline(
     local_file_path: str,
     duration_ticks: int,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
-    """
-    Extract audio from a local video file via ffmpeg and analyze for:
-    1. Bell sounds (2-4.5kHz transients)
-    2. Music starts (energy spikes)
-    """
+    """Internal pipeline that processes audio from ffmpeg stdout."""
     total_seconds = duration_ticks // TICKS_PER_SECOND
 
     process = await asyncio.create_subprocess_exec(
@@ -221,7 +220,7 @@ async def detect_audio_events(
         "-f", "s16le",
         "pipe:1",
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,  # Discard stderr to prevent pipe deadlock
     )
 
     sos = _design_bandpass(BELL_LOW_HZ, BELL_HIGH_HZ, SAMPLE_RATE)
@@ -269,6 +268,30 @@ async def detect_audio_events(
     # Cluster and merge detections
     all_detections = _cluster_bell_hits(all_detections)
     all_detections = _cluster_music_detections(all_detections)
+
+    return all_detections
+
+
+async def detect_audio_events(
+    local_file_path: str,
+    duration_ticks: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """
+    Extract audio from a local video file via ffmpeg and analyze for:
+    1. Bell sounds (2-4.5kHz transients)
+    2. Music starts (energy spikes)
+
+    Includes a 5-minute timeout to prevent hanging.
+    """
+    try:
+        all_detections = await asyncio.wait_for(
+            _run_audio_pipeline(local_file_path, duration_ticks, on_progress),
+            timeout=AUDIO_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Audio analysis timed out after {AUDIO_TIMEOUT_SECONDS}s for {local_file_path}")
+        raise TimeoutError(f"Audio analysis timed out after {AUDIO_TIMEOUT_SECONDS} seconds")
 
     logger.info(
         f"Audio analysis complete: {sum(1 for d in all_detections if d['type'] == 'bell')} bells, "

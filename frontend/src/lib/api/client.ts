@@ -354,8 +354,8 @@ export function updateAppSettings(data: AppSettingsUpdate): Promise<{ success: b
 }
 
 // Analysis
-export function startAnalysis(videoId: number): Promise<{ message: string }> {
-	return request(`/player/${videoId}/analyze`, { method: 'POST' });
+export function startAnalysis(videoId: number, phase: 'both' | 'visual' | 'audio' = 'both'): Promise<{ message: string }> {
+	return request(`/player/${videoId}/analyze?phase=${phase}`, { method: 'POST' });
 }
 
 export function getAnalysisStatus(videoId: number): Promise<AnalysisStatus> {
@@ -368,4 +368,22 @@ export function getAnalysisResults(videoId: number): Promise<AnalysisResults> {
 
 export function clearAnalysis(videoId: number): Promise<{ success: boolean }> {
 	return request(`/player/${videoId}/analyze`, { method: 'DELETE' });
+}
+
+// Batch Analysis
+export interface BatchAnalysisStatus {
+	status: 'none' | 'running' | 'completed' | 'failed';
+	current_video?: number;
+	current_video_title?: string;
+	progress?: number;
+	total?: number;
+	message?: string;
+}
+
+export function startBatchAnalysis(libraryId: number): Promise<{ message: string }> {
+	return request(`/player/libraries/${libraryId}/analyze-all`, { method: 'POST' });
+}
+
+export function getBatchAnalysisStatus(libraryId: number): Promise<BatchAnalysisStatus> {
+	return request(`/player/libraries/${libraryId}/analyze-all/status`);
 }

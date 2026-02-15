@@ -6,40 +6,124 @@ import math
 from typing import Callable
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from app.services.jellyfin_client import JellyfinClient
 
 logger = logging.getLogger(__name__)
 
-HISTOGRAM_BINS = 32
-SCENE_CHANGE_THRESHOLD = 0.70  # correlation below this = scene change
+# Analysis parameters
+THUMB_SIZE = (80, 45)
+SCENE_CHANGE_THRESHOLD = 0.15
+DARK_FRAME_BRIGHTNESS = 15  # grayscale mean below this = dark frame
 MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds in ticks
 
-
-def _compute_histogram(img: Image.Image) -> np.ndarray:
-    """Compute normalized HSV histogram for an image."""
-    hsv = img.convert("HSV")
-    channels = hsv.split()
-    histograms = []
-    for ch in channels:
-        hist = ch.histogram()
-        # Bin down from 256 to HISTOGRAM_BINS
-        bin_size = 256 // HISTOGRAM_BINS
-        binned = [sum(hist[i : i + bin_size]) for i in range(0, 256, bin_size)]
-        histograms.extend(binned)
-    arr = np.array(histograms, dtype=np.float64)
-    total = arr.sum()
-    if total > 0:
-        arr /= total
-    return arr
+# Composite weights
+W_MAD = 0.40
+W_SSIM = 0.30
+W_EDGE = 0.20
+W_BRIGHTNESS = 0.10
 
 
-def _histogram_correlation(h1: np.ndarray, h2: np.ndarray) -> float:
-    """Compute Pearson correlation between two histograms."""
-    if h1.std() == 0 or h2.std() == 0:
-        return 0.0
-    return float(np.corrcoef(h1, h2)[0, 1])
+def _to_rgb_array(img: Image.Image) -> np.ndarray:
+    """Resize image to THUMB_SIZE and return as float32 RGB array (0-255)."""
+    return np.array(img.convert("RGB").resize(THUMB_SIZE, Image.BILINEAR), dtype=np.float32)
+
+
+def _to_gray_array(img: Image.Image) -> np.ndarray:
+    """Resize image to THUMB_SIZE and return as float64 grayscale array (0-255)."""
+    return np.array(img.convert("L").resize(THUMB_SIZE, Image.BILINEAR), dtype=np.float64)
+
+
+def _mean_absolute_difference(a: np.ndarray, b: np.ndarray) -> float:
+    """Pixel-level mean absolute difference, normalized to 0.0-1.0."""
+    return float(np.mean(np.abs(a - b)) / 255.0)
+
+
+def _ssim(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute SSIM between two grayscale arrays using numpy.
+
+    Returns a value in [-1, 1], typically [0, 1] for natural images.
+    """
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+
+    mu_x = np.mean(a)
+    mu_y = np.mean(b)
+    sig_x_sq = np.var(a)
+    sig_y_sq = np.var(b)
+    sig_xy = np.mean((a - mu_x) * (b - mu_y))
+
+    numerator = (2 * mu_x * mu_y + C1) * (2 * sig_xy + C2)
+    denominator = (mu_x ** 2 + mu_y ** 2 + C1) * (sig_x_sq + sig_y_sq + C2)
+
+    return float(numerator / denominator)
+
+
+def _edge_density(img: Image.Image) -> float:
+    """Compute edge pixel density using PIL edge filter."""
+    gray = img.convert("L").resize(THUMB_SIZE, Image.BILINEAR)
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    arr = np.array(edges, dtype=np.float32)
+    # Fraction of pixels above edge threshold (50)
+    return float(np.mean(arr > 50))
+
+
+def _analyze_pair(
+    prev_img: Image.Image, curr_img: Image.Image
+) -> dict:
+    """Analyze a pair of adjacent thumbnails and return detection info."""
+    # Signal 1: Mean Absolute Difference
+    rgb_prev = _to_rgb_array(prev_img)
+    rgb_curr = _to_rgb_array(curr_img)
+    mad = _mean_absolute_difference(rgb_prev, rgb_curr)
+
+    # Signal 2: SSIM change
+    gray_prev = _to_gray_array(prev_img)
+    gray_curr = _to_gray_array(curr_img)
+    ssim_val = _ssim(gray_prev, gray_curr)
+    ssim_change = 1.0 - max(0.0, ssim_val)
+
+    # Signal 3: Dark frame detection
+    brightness = float(np.mean(gray_curr))
+    is_dark = brightness < DARK_FRAME_BRIGHTNESS
+
+    # Signal 4: Edge density change
+    edge_prev = _edge_density(prev_img)
+    edge_curr = _edge_density(curr_img)
+    edge_change = abs(edge_curr - edge_prev)
+    # Normalize edge change (typical range 0-0.3)
+    edge_change_norm = min(1.0, edge_change / 0.3)
+
+    # Brightness change (normalized)
+    brightness_prev = float(np.mean(gray_prev))
+    brightness_change = abs(brightness - brightness_prev) / 255.0
+
+    # Composite score
+    composite = (
+        W_MAD * mad
+        + W_SSIM * ssim_change
+        + W_EDGE * edge_change_norm
+        + W_BRIGHTNESS * brightness_change
+    )
+
+    # Classify detection type
+    if is_dark:
+        det_type = "dark_frame"
+        confidence = 0.9
+    elif edge_change_norm > 0.5 and mad < 0.08:
+        det_type = "graphics_change"
+        confidence = min(1.0, composite / 0.3)
+    else:
+        det_type = "scene_change"
+        confidence = min(1.0, composite / 0.3)
+
+    return {
+        "composite": composite,
+        "type": det_type,
+        "confidence": round(confidence, 3),
+        "is_detection": is_dark or composite > SCENE_CHANGE_THRESHOLD,
+    }
 
 
 def _cluster_detections(detections: list[dict], window_ticks: int) -> list[dict]:
@@ -68,7 +152,7 @@ async def detect_visual_transitions(
 ) -> list[dict]:
     """
     Download trickplay sprite sheets, split into thumbnails,
-    compare adjacent frames using color histogram correlation.
+    compare adjacent frames using multi-signal composite analysis.
     Returns list of detected transitions with timestamps and confidence.
     """
     tile_w = trickplay_meta["tile_width"]
@@ -84,7 +168,7 @@ async def detect_visual_transitions(
 
     total_sheets = math.ceil(total_thumbs / tiles_per_sheet)
     detections: list[dict] = []
-    prev_hist: np.ndarray | None = None
+    prev_thumb: Image.Image | None = None
     thumb_index = 0
 
     for sheet_idx in range(total_sheets):
@@ -96,6 +180,7 @@ async def detect_visual_transitions(
         except Exception as e:
             logger.warning(f"Failed to download trickplay sheet {sheet_idx}: {e}")
             thumb_index += tiles_per_sheet
+            prev_thumb = None
             continue
 
         # Extract each thumbnail from the sprite sheet
@@ -109,19 +194,17 @@ async def detect_visual_transitions(
             y2 = y1 + thumb_pixel_h
 
             thumb = sheet_img.crop((x1, y1, x2, y2))
-            hist = _compute_histogram(thumb)
 
-            if prev_hist is not None:
-                corr = _histogram_correlation(prev_hist, hist)
-                if corr < SCENE_CHANGE_THRESHOLD:
-                    confidence = min(1.0, max(0.0, 1.0 - corr))
+            if prev_thumb is not None:
+                result = _analyze_pair(prev_thumb, thumb)
+                if result["is_detection"]:
                     detections.append({
                         "timestamp_ticks": thumb_index * interval,
-                        "confidence": round(confidence, 3),
-                        "type": "scene_change",
+                        "confidence": result["confidence"],
+                        "type": result["type"],
                     })
 
-            prev_hist = hist
+            prev_thumb = thumb
             thumb_index += 1
 
         # Release the sheet image from memory
@@ -133,5 +216,5 @@ async def detect_visual_transitions(
     # Cluster nearby detections
     detections = _cluster_detections(detections, MERGE_WINDOW_TICKS)
 
-    logger.info(f"Visual analysis complete: {len(detections)} scene changes detected")
+    logger.info(f"Visual analysis complete: {len(detections)} detections found")
     return detections

@@ -94,6 +94,8 @@
 	function markerColor(type: string): string {
 		switch (type) {
 			case 'scene_change': return '#3b82f6';
+			case 'dark_frame': return '#6b7280';
+			case 'graphics_change': return '#a855f7';
 			case 'bell': return '#f59e0b';
 			case 'music_start': return '#22c55e';
 			default: return '#8888a0';
@@ -103,6 +105,8 @@
 	function markerLabel(type: string): string {
 		switch (type) {
 			case 'scene_change': return 'Scene Change';
+			case 'dark_frame': return 'Dark Frame';
+			case 'graphics_change': return 'Graphics Change';
 			case 'bell': return 'Bell';
 			case 'music_start': return 'Music Start';
 			default: return type;
@@ -114,6 +118,8 @@
 			case 'bell': return 'Match Start';
 			case 'music_start': return 'Entrance';
 			case 'scene_change': return 'Segment Break';
+			case 'dark_frame': return 'Segment Break';
+			case 'graphics_change': return 'Graphics';
 			default: return 'Chapter';
 		}
 	}
@@ -258,19 +264,12 @@
 		{:else if status.status === 'completed'}
 			<div class="flex items-center gap-2">
 				<!-- Legend -->
-				<div class="flex items-center gap-3 text-xs text-titan-text-muted">
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full" style="background: #3b82f6"></span>
-						Scene
-					</span>
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full" style="background: #f59e0b"></span>
-						Bell
-					</span>
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full" style="background: #22c55e"></span>
-						Music
-					</span>
+				<div class="flex items-center gap-2 text-[10px] text-titan-text-muted">
+					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #3b82f6"></span>Scene</span>
+					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #6b7280"></span>Dark</span>
+					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #a855f7"></span>Graphics</span>
+					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #f59e0b"></span>Bell</span>
+					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #22c55e"></span>Music</span>
 				</div>
 				<span class="text-xs text-titan-text-muted">|</span>
 				<!-- Zoom controls -->
@@ -297,6 +296,11 @@
 					class="text-xs px-2 py-1 text-titan-text-muted hover:text-titan-text transition-colors"
 					title="Re-analyze"
 				>Re-run</button>
+				<a
+					href="/player/{videoId}/detect"
+					class="text-xs px-2 py-1 text-titan-accent hover:underline"
+					title="Open full detection view"
+				>Detection View</a>
 			</div>
 		{:else if status.status === 'failed'}
 			<span class="text-xs text-red-400 truncate">{status.error || status.message || 'Analysis failed'}</span>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -10,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
 from app.models.analysis_result import AnalysisResult
-from app.models.library import Library
 from app.models.video_item import VideoItem
 from app.services.audio_detector import detect_audio_events
 from app.services.jellyfin_client import JellyfinClient
@@ -21,59 +21,128 @@ logger = logging.getLogger(__name__)
 # In-memory progress tracking keyed by video_item_id
 _analysis_progress: dict[int, dict] = {}
 
+# In-memory batch progress tracking keyed by library_id
+_batch_progress: dict[int, dict] = {}
+
+# Overall timeout for a single video analysis
+ANALYSIS_TIMEOUT_SECONDS = 600  # 10 minutes
+
 
 def get_analysis_progress(video_id: int) -> dict | None:
     return _analysis_progress.get(video_id)
 
 
-async def run_analysis(video_id: int, client: JellyfinClient) -> None:
+def get_batch_progress(library_id: int) -> dict | None:
+    return _batch_progress.get(library_id)
+
+
+async def run_analysis(
+    video_id: int, client: JellyfinClient, phase: str = "both"
+) -> None:
     """
-    Run full analysis pipeline for a video:
-    1. Fetch trickplay metadata and run visual scene detection
-    2. Resolve local file path and run audio pattern detection
+    Run analysis pipeline for a video.
+    phase: "both" (default), "visual", or "audio"
+    1. Fetch trickplay metadata and run visual scene detection (if phase != "audio")
+    2. Resolve local file path and run audio pattern detection (if phase != "visual")
     3. Persist results to DB
     """
     _analysis_progress[video_id] = {
-        "status": "running_visual",
+        "status": "running_visual" if phase != "audio" else "running_audio",
         "progress": 0,
         "total_steps": 0,
-        "message": "Starting visual analysis...",
+        "message": f"Starting {'visual' if phase != 'audio' else 'audio'} analysis...",
     }
 
     try:
-        async with async_session() as db:
-            # Load video + library
-            result = await db.execute(
-                select(VideoItem).where(VideoItem.id == video_id)
-            )
-            video = result.scalar_one_or_none()
-            if not video:
-                raise ValueError(f"Video {video_id} not found")
-
-            # Create or reset analysis result row
-            ar_result = await db.execute(
-                select(AnalysisResult).where(AnalysisResult.video_item_id == video_id)
-            )
-            analysis = ar_result.scalar_one_or_none()
-            if analysis:
-                analysis.status = "running_visual"
-                analysis.progress = 0
-                analysis.total_steps = 0
-                analysis.message = "Starting visual analysis..."
-                analysis.error = None
-                analysis.visual_detections = None
-                analysis.audio_detections = None
-                analysis.completed_at = None
-            else:
-                analysis = AnalysisResult(
-                    video_item_id=video_id,
-                    status="running_visual",
+        await asyncio.wait_for(
+            _run_analysis_pipeline(video_id, client, phase),
+            timeout=ANALYSIS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Analysis timed out for video {video_id}")
+        _analysis_progress[video_id].update({
+            "status": "failed",
+            "message": "Analysis timed out (10 minute limit)",
+        })
+        try:
+            async with async_session() as db:
+                ar_result = await db.execute(
+                    select(AnalysisResult).where(AnalysisResult.video_item_id == video_id)
                 )
-                db.add(analysis)
-            await db.commit()
+                analysis = ar_result.scalar_one_or_none()
+                if analysis:
+                    analysis.status = "failed"
+                    analysis.error = "Analysis timed out"
+                    await db.commit()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Analysis failed for video {video_id}: {e}")
+        _analysis_progress[video_id].update({
+            "status": "failed",
+            "message": f"Analysis failed: {e}",
+        })
+        try:
+            async with async_session() as db:
+                ar_result = await db.execute(
+                    select(AnalysisResult).where(AnalysisResult.video_item_id == video_id)
+                )
+                analysis = ar_result.scalar_one_or_none()
+                if analysis:
+                    analysis.status = "failed"
+                    analysis.error = str(e)
+                    await db.commit()
+        except Exception:
+            pass
+    finally:
+        await asyncio.sleep(5)
+        _analysis_progress.pop(video_id, None)
 
-            # --- Visual scene detection ---
-            visual_detections: list[dict] = []
+
+async def _run_analysis_pipeline(
+    video_id: int, client: JellyfinClient, phase: str
+) -> None:
+    """Inner pipeline that does the actual analysis work."""
+    async with async_session() as db:
+        # Load video
+        result = await db.execute(
+            select(VideoItem).where(VideoItem.id == video_id)
+        )
+        video = result.scalar_one_or_none()
+        if not video:
+            raise ValueError(f"Video {video_id} not found")
+
+        # Create or update analysis result row
+        ar_result = await db.execute(
+            select(AnalysisResult).where(AnalysisResult.video_item_id == video_id)
+        )
+        analysis = ar_result.scalar_one_or_none()
+
+        if analysis:
+            status = "running_visual" if phase != "audio" else "running_audio"
+            analysis.status = status
+            analysis.progress = 0
+            analysis.total_steps = 0
+            analysis.message = f"Starting {phase} analysis..."
+            analysis.error = None
+            # Only clear detections for the phase being re-run
+            if phase in ("both", "visual"):
+                analysis.visual_detections = None
+            if phase in ("both", "audio"):
+                analysis.audio_detections = None
+                analysis.audio_skip_reason = None
+            analysis.completed_at = None
+        else:
+            analysis = AnalysisResult(
+                video_item_id=video_id,
+                status="running_visual" if phase != "audio" else "running_audio",
+            )
+            db.add(analysis)
+        await db.commit()
+
+        # --- Visual scene detection ---
+        visual_detections: list[dict] = []
+        if phase in ("both", "visual"):
             try:
                 detail = await client.get_item_detail(video.jellyfin_item_id)
                 tp = detail.get("Trickplay", {})
@@ -112,6 +181,9 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
 
             # Save visual results
             analysis.visual_detections = json.dumps(visual_detections)
+
+        # --- Audio detection ---
+        if phase in ("both", "audio"):
             analysis.status = "running_audio"
             analysis.progress = 0
             analysis.total_steps = 0
@@ -125,7 +197,6 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
                 "message": "Starting audio analysis...",
             })
 
-            # --- Audio detection ---
             audio_detections: list[dict] = []
             audio_skip_reason: str | None = None
             local_path = None
@@ -171,45 +242,108 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
                         f"Audio analysis skipped (file not found: {local_path})"
                     )
 
-            # Save final results
             analysis.audio_detections = json.dumps(audio_detections)
             analysis.audio_skip_reason = audio_skip_reason
-            analysis.status = "completed"
-            analysis.completed_at = datetime.now()
-            skip_note = f" (skipped: {audio_skip_reason.split(':')[0]})" if audio_skip_reason else ""
-            analysis.message = (
-                f"Done: {len(visual_detections)} visual, {len(audio_detections)} audio detections{skip_note}"
-            )
-            analysis.error = None
-            await db.commit()
 
-            _analysis_progress[video_id].update({
+        # Save final results
+        analysis.status = "completed"
+        analysis.completed_at = datetime.now()
+
+        # Build summary message
+        vis_count = len(json.loads(analysis.visual_detections or "[]"))
+        aud_count = len(json.loads(analysis.audio_detections or "[]"))
+        skip_note = ""
+        if analysis.audio_skip_reason:
+            skip_note = f" (skipped: {analysis.audio_skip_reason.split(':')[0]})"
+        analysis.message = f"Done: {vis_count} visual, {aud_count} audio detections{skip_note}"
+        analysis.error = None
+        await db.commit()
+
+        _analysis_progress[video_id].update({
+            "status": "completed",
+            "message": analysis.message,
+            "audio_skip_reason": analysis.audio_skip_reason,
+        })
+
+
+async def run_batch_analysis(library_id: int, client: JellyfinClient) -> None:
+    """
+    Process all unanalyzed videos in a library sequentially.
+    Skips videos that already have completed analysis.
+    """
+    _batch_progress[library_id] = {
+        "status": "running",
+        "current_video": None,
+        "current_video_title": None,
+        "progress": 0,
+        "total": 0,
+        "message": "Loading videos...",
+    }
+
+    try:
+        async with async_session() as db:
+            # Get all videos in the library
+            result = await db.execute(
+                select(VideoItem).where(VideoItem.library_id == library_id)
+            )
+            all_videos = result.scalars().all()
+
+            # Filter out videos that already have completed analysis
+            videos_to_analyze = []
+            for video in all_videos:
+                ar_result = await db.execute(
+                    select(AnalysisResult).where(
+                        AnalysisResult.video_item_id == video.id,
+                        AnalysisResult.status == "completed",
+                    )
+                )
+                if not ar_result.scalar_one_or_none():
+                    videos_to_analyze.append(video)
+
+        total = len(videos_to_analyze)
+        _batch_progress[library_id].update({
+            "total": total,
+            "message": f"Analyzing {total} videos...",
+        })
+
+        if total == 0:
+            _batch_progress[library_id].update({
                 "status": "completed",
-                "message": analysis.message,
-                "audio_skip_reason": audio_skip_reason,
+                "message": "All videos already analyzed",
+            })
+            await asyncio.sleep(5)
+            _batch_progress.pop(library_id, None)
+            return
+
+        for i, video in enumerate(videos_to_analyze):
+            _batch_progress[library_id].update({
+                "current_video": video.id,
+                "current_video_title": video.title,
+                "progress": i,
+                "message": f"Analyzing {i + 1}/{total}: {video.title}",
             })
 
-    except Exception as e:
-        logger.error(f"Analysis failed for video {video_id}: {e}")
-        _analysis_progress[video_id].update({
-            "status": "failed",
-            "message": f"Analysis failed: {e}",
+            try:
+                await _run_analysis_pipeline(video.id, client, "both")
+            except Exception as e:
+                logger.error(f"Batch analysis failed for video {video.id}: {e}")
+                # Continue with next video
+
+            # Clean up per-video progress
+            _analysis_progress.pop(video.id, None)
+
+        _batch_progress[library_id].update({
+            "status": "completed",
+            "progress": total,
+            "message": f"Batch analysis complete: {total} videos processed",
         })
-        # Try to update DB status
-        try:
-            async with async_session() as db:
-                ar_result = await db.execute(
-                    select(AnalysisResult).where(AnalysisResult.video_item_id == video_id)
-                )
-                analysis = ar_result.scalar_one_or_none()
-                if analysis:
-                    analysis.status = "failed"
-                    analysis.error = str(e)
-                    await db.commit()
-        except Exception:
-            pass
+
+    except Exception as e:
+        logger.error(f"Batch analysis failed for library {library_id}: {e}")
+        _batch_progress[library_id].update({
+            "status": "failed",
+            "message": f"Batch analysis failed: {e}",
+        })
     finally:
-        # Clean up in-memory progress after a delay so the frontend can read the final status
-        import asyncio
-        await asyncio.sleep(5)
-        _analysis_progress.pop(video_id, None)
+        await asyncio.sleep(10)
+        _batch_progress.pop(library_id, None)
