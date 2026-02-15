@@ -22,14 +22,17 @@ async def list_jellyfin_libraries(client: JellyfinClient = Depends(get_jellyfin_
     """List available libraries from the connected Jellyfin server."""
     try:
         views = await client.get_views()
-        virtual_folders = await client.get_virtual_folders()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch libraries: {e}")
 
-    # Build a map of library name -> paths from virtual folders
+    # Virtual folders may require Jellyfin admin — don't fail if unavailable
     folder_paths: dict[str, list[str]] = {}
-    for vf in virtual_folders:
-        folder_paths[vf["name"]] = vf["paths"]
+    try:
+        virtual_folders = await client.get_virtual_folders()
+        for vf in virtual_folders:
+            folder_paths[vf["name"]] = vf["paths"]
+    except Exception:
+        pass
 
     return [
         {
