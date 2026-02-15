@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import struct
 from typing import Callable
 
 import numpy as np
@@ -19,12 +18,13 @@ TICKS_PER_SECOND = 10_000_000
 # Bell detection params
 BELL_LOW_HZ = 2000
 BELL_HIGH_HZ = 4500
-BELL_ENERGY_THRESHOLD = 3.0  # multiplier over median
-BELL_CLUSTER_WINDOW_SECS = 30  # seconds to look for repeated bell hits
-BELL_MIN_CLUSTER = 2  # minimum hits to boost confidence
+BELL_ENERGY_THRESHOLD = 2.0  # multiplier over rolling baseline
+BELL_SPECTRAL_RATIO = 0.08  # bell band must be this fraction of total FFT energy
+BELL_CLUSTER_WINDOW_SECS = 30
+BELL_MIN_CLUSTER = 2
 
 # Music detection params
-MUSIC_ENERGY_THRESHOLD = 2.0  # multiplier over previous window energy
+MUSIC_ENERGY_THRESHOLD = 1.5  # multiplier over previous window energy
 MUSIC_MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds
 
 # Timeout for entire audio analysis pipeline
@@ -47,9 +47,13 @@ def _rms(signal_data: np.ndarray) -> float:
 
 
 def _detect_bells_in_chunk(
-    samples: np.ndarray, sos: np.ndarray, chunk_offset_secs: float
-) -> list[dict]:
-    """Detect bell-like sounds in a chunk of audio."""
+    samples: np.ndarray, sos: np.ndarray, chunk_offset_secs: float,
+    rolling_baseline: float,
+) -> tuple[list[dict], int, int]:
+    """
+    Detect bell-like sounds in a chunk of audio.
+    Returns (detections, candidates_found, candidates_passed_spectral).
+    """
     # Apply bandpass filter for bell frequency range
     filtered = scipy_signal.sosfilt(sos, samples.astype(np.float64))
 
@@ -62,16 +66,20 @@ def _detect_bells_in_chunk(
             energies.append(_rms(window))
 
     if not energies:
-        return []
+        return [], 0, 0
 
-    median_energy = float(np.median(energies))
-    if median_energy == 0:
-        return []
+    baseline = rolling_baseline if rolling_baseline > 0 else float(np.median(energies))
+    if baseline == 0:
+        return [], 0, 0
 
     detections = []
+    candidates = 0
+    passed_spectral = 0
+
     for i, energy in enumerate(energies):
-        ratio = energy / median_energy
+        ratio = energy / baseline
         if ratio > BELL_ENERGY_THRESHOLD:
+            candidates += 1
             sub_time_secs = chunk_offset_secs + i * 0.5
             ticks = int(sub_time_secs * TICKS_PER_SECOND)
 
@@ -85,7 +93,6 @@ def _detect_bells_in_chunk(
             fft_vals = np.abs(rfft(segment))
             freqs = rfftfreq(len(segment), 1.0 / SAMPLE_RATE)
 
-            # Find peak frequency
             bell_mask = (freqs >= BELL_LOW_HZ) & (freqs <= BELL_HIGH_HZ)
             if not bell_mask.any():
                 continue
@@ -96,17 +103,19 @@ def _detect_bells_in_chunk(
                 continue
 
             bell_ratio = bell_energy / total_energy
-            if bell_ratio < 0.15:
+            if bell_ratio < BELL_SPECTRAL_RATIO:
                 continue
 
-            confidence = min(0.9, (ratio / 10.0) * bell_ratio * 3)
+            passed_spectral += 1
+            confidence = min(0.9, (ratio / 8.0) * bell_ratio * 4)
+            confidence = max(0.1, confidence)
             detections.append({
                 "timestamp_ticks": ticks,
                 "confidence": round(confidence, 3),
                 "type": "bell",
             })
 
-    return detections
+    return detections, candidates, passed_spectral
 
 
 def _detect_music_in_chunk(
@@ -129,7 +138,7 @@ def _detect_music_in_chunk(
                 flatness = geo_mean / arith_mean if arith_mean > 0 else 0
 
                 # Lower flatness = more tonal/musical (not just noise)
-                if flatness < 0.5:
+                if flatness < 0.6:
                     confidence = min(0.85, (ratio - MUSIC_ENERGY_THRESHOLD) * 0.3)
                     confidence = max(0.1, confidence)
                     detections.append({
@@ -170,7 +179,6 @@ def _cluster_bell_hits(detections: list[dict]) -> list[dict]:
     for cluster in clusters:
         best = max(cluster, key=lambda d: d["confidence"])
         if len(cluster) >= BELL_MIN_CLUSTER:
-            # Boost confidence for repeated bell pattern
             best["confidence"] = min(0.95, best["confidence"] + 0.15 * len(cluster))
             best["confidence"] = round(best["confidence"], 3)
         result.append(best)
@@ -209,6 +217,9 @@ async def _run_audio_pipeline(
 ) -> list[dict]:
     """Internal pipeline that processes audio from ffmpeg stdout."""
     total_seconds = duration_ticks // TICKS_PER_SECOND
+    chunk_bytes = CHUNK_SAMPLES * 2  # 16-bit = 2 bytes per sample
+
+    print(f"[AUDIO] Starting ffmpeg audio extraction: {local_file_path}, {total_seconds}s", flush=True)
 
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
@@ -220,33 +231,59 @@ async def _run_audio_pipeline(
         "-f", "s16le",
         "pipe:1",
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,  # Discard stderr to prevent pipe deadlock
+        stderr=asyncio.subprocess.PIPE,
     )
+
+    # Drain stderr in background to prevent pipe deadlock
+    stderr_lines: list[str] = []
+
+    async def _drain_stderr():
+        async for line in process.stderr:
+            stderr_lines.append(line.decode("utf-8", errors="replace").rstrip())
+
+    stderr_task = asyncio.create_task(_drain_stderr())
 
     sos = _design_bandpass(BELL_LOW_HZ, BELL_HIGH_HZ, SAMPLE_RATE)
     all_detections: list[dict] = []
     prev_energy = 0.0
     chunk_idx = 0
-    bytes_per_sample = 2  # 16-bit signed
+
+    # Rolling baseline for bell detection (exponential moving average of bandpass RMS)
+    rolling_bell_baseline = 0.0
+    ema_alpha = 0.1  # smoothing factor
+
+    total_bell_candidates = 0
+    total_bell_passed = 0
 
     try:
         while True:
-            raw = await process.stdout.read(CHUNK_SAMPLES * bytes_per_sample)
-            if not raw:
-                break
+            try:
+                raw = await process.stdout.readexactly(chunk_bytes)
+            except asyncio.IncompleteReadError as e:
+                raw = e.partial
+                if len(raw) < SAMPLE_RATE * 2:  # less than 1 second
+                    break
 
-            # Convert raw bytes to numpy array
-            n_samples = len(raw) // bytes_per_sample
-            samples = np.frombuffer(raw[:n_samples * bytes_per_sample], dtype=np.int16)
-
-            if len(samples) < SAMPLE_RATE:  # Skip very short final chunks
-                break
-
+            samples = np.frombuffer(raw, dtype=np.int16)
             chunk_offset_secs = chunk_idx * CHUNK_SECONDS
 
+            # Update rolling baseline with this chunk's bandpass energy
+            filtered = scipy_signal.sosfilt(sos, samples.astype(np.float64))
+            chunk_bell_rms = _rms(filtered)
+            if rolling_bell_baseline == 0:
+                rolling_bell_baseline = chunk_bell_rms
+            else:
+                rolling_bell_baseline = (
+                    ema_alpha * chunk_bell_rms + (1 - ema_alpha) * rolling_bell_baseline
+                )
+
             # Bell detection
-            bell_hits = _detect_bells_in_chunk(samples, sos, chunk_offset_secs)
+            bell_hits, candidates, passed = _detect_bells_in_chunk(
+                samples, sos, chunk_offset_secs, rolling_bell_baseline,
+            )
             all_detections.extend(bell_hits)
+            total_bell_candidates += candidates
+            total_bell_passed += passed
 
             # Music start detection
             music_hits, prev_energy = _detect_music_in_chunk(
@@ -264,6 +301,18 @@ async def _run_audio_pipeline(
         if process.returncode is None:
             process.kill()
         await process.wait()
+        await stderr_task
+
+    print(
+        f"[AUDIO] Processed {chunk_idx} chunks ({chunk_idx * CHUNK_SECONDS}s). "
+        f"Bell candidates: {total_bell_candidates}, passed spectral: {total_bell_passed}. "
+        f"Raw detections: {len(all_detections)}",
+        flush=True,
+    )
+
+    if process.returncode != 0:
+        last_lines = stderr_lines[-5:] if stderr_lines else ["(no stderr)"]
+        print(f"[AUDIO] ffmpeg exited with code {process.returncode}: {' | '.join(last_lines)}", flush=True)
 
     # Cluster and merge detections
     all_detections = _cluster_bell_hits(all_detections)
@@ -290,11 +339,10 @@ async def detect_audio_events(
             timeout=AUDIO_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
-        logger.error(f"Audio analysis timed out after {AUDIO_TIMEOUT_SECONDS}s for {local_file_path}")
+        print(f"[AUDIO] Timed out after {AUDIO_TIMEOUT_SECONDS}s for {local_file_path}", flush=True)
         raise TimeoutError(f"Audio analysis timed out after {AUDIO_TIMEOUT_SECONDS} seconds")
 
-    logger.info(
-        f"Audio analysis complete: {sum(1 for d in all_detections if d['type'] == 'bell')} bells, "
-        f"{sum(1 for d in all_detections if d['type'] == 'music_start')} music starts"
-    )
+    bells = sum(1 for d in all_detections if d["type"] == "bell")
+    music = sum(1 for d in all_detections if d["type"] == "music_start")
+    print(f"[AUDIO] Complete: {bells} bells, {music} music starts (after clustering)", flush=True)
     return all_detections
