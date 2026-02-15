@@ -144,9 +144,10 @@ async def detect_visual_transitions(
     total_seconds = duration_ticks // TICKS_PER_SECOND
     expected_frames = int(total_seconds * FRAME_RATE)
 
-    logger.info(
-        f"Starting visual analysis: {total_seconds}s video, "
-        f"extracting ~{expected_frames} frames at {FRAME_RATE}fps"
+    print(
+        f"[VISUAL] Starting visual analysis: {total_seconds}s video, "
+        f"extracting ~{expected_frames} frames at {FRAME_RATE}fps",
+        flush=True,
     )
 
     try:
@@ -155,13 +156,13 @@ async def detect_visual_transitions(
             timeout=VISUAL_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
-        logger.error(f"Visual analysis timed out after {VISUAL_TIMEOUT_SECONDS}s")
+        print(f"[VISUAL] Timed out after {VISUAL_TIMEOUT_SECONDS}s", flush=True)
         raise TimeoutError(f"Visual analysis timed out after {VISUAL_TIMEOUT_SECONDS}s")
 
     # Cluster nearby detections
     detections = _cluster_detections(detections, MERGE_WINDOW_TICKS)
 
-    logger.info(f"Visual analysis complete: {len(detections)} detections found")
+    print(f"[VISUAL] Complete: {len(detections)} detections (after clustering)", flush=True)
     return detections
 
 
@@ -171,10 +172,9 @@ async def _run_visual_pipeline(
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
     """Extract frames via ffmpeg and analyze adjacent pairs."""
-    # ffmpeg: extract frames as JPEG images piped to stdout
-    # -vf fps=0.5 extracts 1 frame every 2 seconds
-    # Output as raw RGB frames at FRAME_SIZE resolution
     w, h = FRAME_SIZE
+    print(f"[VISUAL] Starting ffmpeg: {local_file_path}, {total_seconds}s video", flush=True)
+
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-i", local_file_path,
@@ -183,8 +183,17 @@ async def _run_visual_pipeline(
         "-f", "rawvideo",
         "pipe:1",
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
     )
+
+    # Drain stderr in background to prevent pipe deadlock
+    stderr_lines: list[str] = []
+
+    async def _drain_stderr():
+        async for line in process.stderr:
+            stderr_lines.append(line.decode("utf-8", errors="replace").rstrip())
+
+    stderr_task = asyncio.create_task(_drain_stderr())
 
     frame_bytes = w * h * 3  # RGB24
     detections: list[dict] = []
@@ -194,11 +203,11 @@ async def _run_visual_pipeline(
 
     try:
         while True:
-            raw = await process.stdout.read(frame_bytes)
-            if len(raw) < frame_bytes:
+            try:
+                raw = await process.stdout.readexactly(frame_bytes)
+            except asyncio.IncompleteReadError:
                 break
 
-            # Convert raw RGB bytes to PIL Image
             img = Image.frombytes("RGB", (w, h), raw)
 
             if prev_img is not None:
@@ -221,8 +230,14 @@ async def _run_visual_pipeline(
         if process.returncode is None:
             process.kill()
         await process.wait()
+        await stderr_task
 
-    logger.info(f"Processed {frame_idx} frames, found {len(detections)} raw detections")
+    print(f"[VISUAL] Processed {frame_idx} frames, found {len(detections)} raw detections", flush=True)
+
+    if process.returncode != 0:
+        last_lines = stderr_lines[-5:] if stderr_lines else ["(no stderr)"]
+        print(f"[VISUAL] ffmpeg exited with code {process.returncode}: {' | '.join(last_lines)}", flush=True)
+
     return detections
 
 

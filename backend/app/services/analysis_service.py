@@ -149,12 +149,17 @@ async def _run_analysis_pipeline(
             from app.config import get_setting
             path_from = get_setting("path_map_from")
             path_to = get_setting("path_map_to")
+            print(f"[ANALYSIS] Path mapping: from={path_from!r} to={path_to!r} video.path={video.path!r}", flush=True)
             if path_from and path_to and video.path.startswith(path_from):
                 relative = video.path[len(path_from):].lstrip("/")
                 local_path = os.path.join(path_to, relative)
                 if not os.path.isfile(local_path):
-                    logger.warning(f"Local file not found: {local_path}")
+                    print(f"[ANALYSIS] Local file NOT found: {local_path}", flush=True)
                     local_path = None
+                else:
+                    print(f"[ANALYSIS] Local file found: {local_path}", flush=True)
+        else:
+            print(f"[ANALYSIS] Video has no path set", flush=True)
 
         # --- Visual scene detection ---
         visual_detections: list[dict] = []
