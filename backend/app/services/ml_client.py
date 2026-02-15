@@ -90,7 +90,7 @@ async def classify_audio(
             f"{url}/classify?window_secs={window_secs}",
             data=pcm_data,
             headers={"Content-Type": "application/octet-stream"},
-            timeout=aiohttp.ClientTimeout(total=ML_CLASSIFY_TIMEOUT),
+            timeout=aiohttp.ClientTimeout(total=ML_CLASSIFY_TIMEOUT, sock_read=ML_CLASSIFY_TIMEOUT, sock_connect=30),
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()

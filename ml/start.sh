@@ -38,4 +38,4 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8769
+exec uvicorn app.main:app --host 0.0.0.0 --port 8769 --timeout-keep-alive 300 --h11-max-incomplete-event-size 0

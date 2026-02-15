@@ -76,7 +76,12 @@ async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
         window_secs: analysis window size (default 30, use 2-10 for GPU)
     Returns JSON with detected music_start events.
     """
-    body = await request.body()
+    # Stream the body in chunks to handle large files (1GB+)
+    chunks = []
+    async for chunk in request.stream():
+        chunks.append(chunk)
+    body = b"".join(chunks)
+
     if len(body) < 4:
         return {"detections": [], "error": "Empty audio data"}
 
