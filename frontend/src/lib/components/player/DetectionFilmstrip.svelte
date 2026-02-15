@@ -31,6 +31,7 @@
 	let selectedDetection = $state<Detection | null>(null);
 	let popoverX = $state(0);
 	let popoverY = $state(0);
+	let showAnalysisMenu = $state(false);
 
 	// Thumbnail dimensions (width/height from Jellyfin are individual thumb size)
 	const thumbPixelW = trickplay.width;
@@ -156,10 +157,11 @@
 		selectedDetection = null;
 	}
 
-	async function handleStartAnalysis() {
+	async function handleStartAnalysis(phase: 'both' | 'visual' | 'audio' = 'both') {
+		showAnalysisMenu = false;
 		try {
-			await startAnalysis(videoId);
-			status = { status: 'running_visual', message: 'Starting analysis...' };
+			await startAnalysis(videoId, phase);
+			status = { status: phase === 'audio' ? 'running_audio' : 'running_visual', message: `Starting ${phase} analysis...` };
 			startPolling();
 		} catch (e: any) {
 			status = { status: 'failed', error: e.message || 'Failed to start analysis' };
@@ -215,6 +217,23 @@
 		stopPolling();
 	});
 
+	// Close analysis menu when clicking outside
+	function handleClickOutside(e: MouseEvent) {
+		if (showAnalysisMenu) {
+			const target = e.target as HTMLElement;
+			if (!target.closest('.relative')) {
+				showAnalysisMenu = false;
+			}
+		}
+	}
+
+	$effect(() => {
+		if (showAnalysisMenu) {
+			document.addEventListener('click', handleClickOutside, true);
+			return () => document.removeEventListener('click', handleClickOutside, true);
+		}
+	});
+
 	// Visible thumbnail range for performance (only render what's in view)
 	let visibleStart = $state(0);
 	let visibleEnd = $state(100);
@@ -242,12 +261,22 @@
 		<div class="flex-1"></div>
 
 		{#if status.status === 'none'}
-			<button
-				onclick={handleStartAnalysis}
-				class="text-xs px-3 py-1.5 bg-titan-accent text-white rounded hover:opacity-90 transition-opacity"
-			>
-				Detect Match Boundaries
-			</button>
+			<div class="relative">
+				<button
+					onclick={() => { showAnalysisMenu = !showAnalysisMenu; }}
+					class="text-xs px-3 py-1.5 bg-titan-accent text-white rounded hover:opacity-90 transition-opacity flex items-center gap-1"
+				>
+					Detect Match Boundaries
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+				</button>
+				{#if showAnalysisMenu}
+					<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+						<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
+						<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
+						<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
+					</div>
+				{/if}
+			</div>
 		{:else if status.status?.startsWith('running')}
 			<div class="flex items-center gap-2 flex-1">
 				<div class="animate-spin h-3.5 w-3.5 border-2 border-titan-accent border-t-transparent rounded-full"></div>
@@ -291,11 +320,23 @@
 					class="text-xs px-2 py-1 text-titan-text-muted hover:text-red-400 transition-colors"
 					title="Clear analysis results"
 				>Clear</button>
-				<button
-					onclick={handleStartAnalysis}
-					class="text-xs px-2 py-1 text-titan-text-muted hover:text-titan-text transition-colors"
-					title="Re-analyze"
-				>Re-run</button>
+				<div class="relative">
+					<button
+						onclick={() => { showAnalysisMenu = !showAnalysisMenu; }}
+						class="text-xs px-2 py-1 text-titan-text-muted hover:text-titan-text transition-colors flex items-center gap-0.5"
+						title="Re-analyze"
+					>
+						Re-run
+						<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+					</button>
+					{#if showAnalysisMenu}
+						<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+							<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
+							<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
+							<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
+						</div>
+					{/if}
+				</div>
 				<a
 					href="/player/{videoId}/detect"
 					class="text-xs px-2 py-1 text-titan-accent hover:underline"
@@ -304,10 +345,22 @@
 			</div>
 		{:else if status.status === 'failed'}
 			<span class="text-xs text-red-400 truncate">{status.error || status.message || 'Analysis failed'}</span>
-			<button
-				onclick={handleStartAnalysis}
-				class="text-xs px-2 py-1 bg-titan-border rounded hover:bg-titan-surface-hover"
-			>Retry</button>
+			<div class="relative">
+				<button
+					onclick={() => { showAnalysisMenu = !showAnalysisMenu; }}
+					class="text-xs px-2 py-1 bg-titan-border rounded hover:bg-titan-surface-hover flex items-center gap-0.5"
+				>
+					Retry
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+				</button>
+				{#if showAnalysisMenu}
+					<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+						<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
+						<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
+						<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
+					</div>
+				{/if}
+			</div>
 		{/if}
 	</div>
 

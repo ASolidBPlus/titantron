@@ -1,13 +1,11 @@
-Deploy the latest code to the testing environment. Handles the full pipeline: wait for CI, pull image, deploy, verify.
+Deploy the latest code to the testing environment. Handles the full pipeline: wait for CI, pull image, verify.
 
 ## Environment
 
 - GitHub repo: `ASolidBPlus/titantron`
 - GHCR image: `ghcr.io/asolidbplus/titantron:latest`
 - Komodo: `http://192.168.0.250:9120/`
-- Komodo auth:
-  - `X-Api-Key: K-nkoV5vDXWyvSfjxEcqStTNiwARQzovY1DJ73wsXc`
-  - `X-Api-Secret: S-8Cb3m3mlyerJqHt7eNifHsGkGc2vr8PdawnXLwpw`
+- Komodo auth: read `KOMODO_KEY` and `KOMODO_SECRET` from `/home/joelle/Documents/code/titantron/.env`
 - Stack name: `titantron`
 - Live URL: `https://titantron-testing.dinfra.cloud/`
 
@@ -26,29 +24,21 @@ Check `workflow_runs[0].status` and `workflow_runs[0].conclusion`:
 
 ## Step 2: Pull latest image via Komodo
 
+Auto-update is enabled on the stack, so pulling triggers an automatic deploy. No separate deploy step needed.
+
 ```bash
+KOMODO_KEY=$(grep KOMODO_KEY /home/joelle/Documents/code/titantron/.env | cut -d= -f2)
+KOMODO_SECRET=$(grep KOMODO_SECRET /home/joelle/Documents/code/titantron/.env | cut -d= -f2)
 curl -s -X POST http://192.168.0.250:9120/execute \
-  -H "X-Api-Key: K-nkoV5vDXWyvSfjxEcqStTNiwARQzovY1DJ73wsXc" \
-  -H "X-Api-Secret: S-8Cb3m3mlyerJqHt7eNifHsGkGc2vr8PdawnXLwpw" \
+  -H "X-Api-Key: $KOMODO_KEY" \
+  -H "X-Api-Secret: $KOMODO_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"type":"PullStack","params":{"stack":"titantron","services":[]}}'
 ```
 
-Wait 10 seconds for pull to complete.
+Wait 30 seconds for pull + auto-deploy to complete.
 
-## Step 3: Deploy via Komodo
-
-```bash
-curl -s -X POST http://192.168.0.250:9120/execute \
-  -H "X-Api-Key: K-nkoV5vDXWyvSfjxEcqStTNiwARQzovY1DJ73wsXc" \
-  -H "X-Api-Secret: S-8Cb3m3mlyerJqHt7eNifHsGkGc2vr8PdawnXLwpw" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"DeployStack","params":{"stack":"titantron","services":[],"stop_time":null}}'
-```
-
-Wait 15 seconds for container to start.
-
-## Step 4: Verify deployment
+## Step 3: Verify deployment
 
 1. Health check:
    ```bash
@@ -70,7 +60,6 @@ Report a summary:
 | Step | Result |
 |------|--------|
 | CI build | success/failure |
-| Image pull | success/failure |
-| Deploy | success/failure |
+| Image pull + auto-deploy | success/failure |
 | Health check | HTTP status |
 | Smoke test | HTTP status |
