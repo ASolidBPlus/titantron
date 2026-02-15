@@ -14,10 +14,12 @@ from app.dependencies import require_admin
 from app.routers import admin_auth, admin_settings, analysis, auth, browse, libraries, matching, player, search, sync, wrestlers
 
 # Configure logging so all loggers output to stderr (visible in container logs)
+# force=True overrides any pre-existing config from uvicorn
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(levelname)-5s [%(name)s] %(message)s",
     stream=sys.stderr,
+    force=True,
 )
 
 

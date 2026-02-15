@@ -15,7 +15,7 @@ from app.models.analysis_result import AnalysisResult
 from app.models.video_item import VideoItem
 from app.services.audio_detector import detect_audio_events
 from app.services.jellyfin_client import JellyfinClient
-from app.services.scene_detector import detect_visual_transitions
+from app.services.scene_detector import detect_visual_transitions, detect_visual_transitions_trickplay
 
 logger = logging.getLogger(__name__)
 
@@ -143,43 +143,68 @@ async def _run_analysis_pipeline(
             db.add(analysis)
         await db.commit()
 
+        # --- Resolve local file path (shared by visual + audio) ---
+        local_path = None
+        if video.path:
+            from app.config import get_setting
+            path_from = get_setting("path_map_from")
+            path_to = get_setting("path_map_to")
+            if path_from and path_to and video.path.startswith(path_from):
+                relative = video.path[len(path_from):].lstrip("/")
+                local_path = os.path.join(path_to, relative)
+                if not os.path.isfile(local_path):
+                    logger.warning(f"Local file not found: {local_path}")
+                    local_path = None
+
         # --- Visual scene detection ---
         visual_detections: list[dict] = []
         if phase in ("both", "visual"):
             try:
-                detail = await client.get_item_detail(video.jellyfin_item_id)
-                tp = detail.get("Trickplay", {})
-                trickplay_meta = None
-                for media_id, resolutions in tp.items():
-                    for res_str, meta in resolutions.items():
-                        trickplay_meta = {
-                            "resolution": int(res_str),
-                            "width": meta["Width"],
-                            "height": meta["Height"],
-                            "tile_width": meta["TileWidth"],
-                            "tile_height": meta["TileHeight"],
-                            "thumbnail_count": meta["ThumbnailCount"],
-                            "interval": meta["Interval"],
-                        }
-                        break
-                    break
+                def on_visual_progress(current: int, total: int):
+                    _analysis_progress[video_id].update({
+                        "progress": current,
+                        "total_steps": total,
+                        "message": f"Analyzing video frames ({current}/{total}s)...",
+                    })
 
-                if trickplay_meta:
-                    def on_visual_progress(current: int, total: int):
-                        _analysis_progress[video_id].update({
-                            "progress": current,
-                            "total_steps": total,
-                            "message": f"Analyzing trickplay sheets ({current}/{total})...",
-                        })
-
+                if local_path:
+                    # Primary: ffmpeg frame extraction (0.5fps, much more accurate)
+                    logger.info(f"Visual detection via ffmpeg: {local_path}")
                     visual_detections = await detect_visual_transitions(
-                        client, video.jellyfin_item_id, trickplay_meta,
+                        local_path,
+                        video.duration_ticks or 0,
                         on_progress=on_visual_progress,
                     )
                 else:
-                    logger.info(f"Video {video_id} has no trickplay data, skipping visual detection")
+                    # Fallback: trickplay thumbnails (less accurate, 10s intervals)
+                    logger.info(f"Visual detection via trickplay (no local path)")
+                    detail = await client.get_item_detail(video.jellyfin_item_id)
+                    tp = detail.get("Trickplay", {})
+                    trickplay_meta = None
+                    for media_id, resolutions in tp.items():
+                        for res_str, meta in resolutions.items():
+                            trickplay_meta = {
+                                "resolution": int(res_str),
+                                "width": meta["Width"],
+                                "height": meta["Height"],
+                                "tile_width": meta["TileWidth"],
+                                "tile_height": meta["TileHeight"],
+                                "thumbnail_count": meta["ThumbnailCount"],
+                                "interval": meta["Interval"],
+                            }
+                            break
+                        break
+
+                    if trickplay_meta:
+                        visual_detections = await detect_visual_transitions_trickplay(
+                            client, video.jellyfin_item_id, trickplay_meta,
+                            on_progress=on_visual_progress,
+                        )
+                    else:
+                        logger.info(f"Video {video_id} has no trickplay data, skipping visual detection")
             except Exception as e:
                 logger.error(f"Visual detection failed: {e}")
+                traceback.print_exc()
                 _analysis_progress[video_id]["message"] = f"Visual detection failed: {e}"
 
             # Save visual results
@@ -202,18 +227,8 @@ async def _run_analysis_pipeline(
 
             audio_detections: list[dict] = []
             audio_skip_reason: str | None = None
-            local_path = None
 
-            # Resolve local file path via global path mapping
-            if video.path:
-                from app.config import get_setting
-                path_from = get_setting("path_map_from")
-                path_to = get_setting("path_map_to")
-                if path_from and path_to and video.path.startswith(path_from):
-                    relative = video.path[len(path_from):].lstrip("/")
-                    local_path = os.path.join(path_to, relative)
-
-            if local_path and os.path.isfile(local_path):
+            if local_path:
                 try:
                     def on_audio_progress(current: int, total: int):
                         _analysis_progress[video_id].update({

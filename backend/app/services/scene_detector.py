@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import math
+import traceback
 from typing import Callable
 
 import numpy as np
@@ -12,94 +14,80 @@ from app.services.jellyfin_client import JellyfinClient
 
 logger = logging.getLogger(__name__)
 
-# Analysis parameters
-THUMB_SIZE = (80, 45)
-SCENE_CHANGE_THRESHOLD = 0.15
+# Frame extraction parameters
+FRAME_RATE = 0.5  # frames per second (1 frame every 2 seconds)
+FRAME_SIZE = (160, 90)  # analysis resolution
+TICKS_PER_SECOND = 10_000_000
+
+# Detection thresholds (calibrated for 2-second frame intervals)
+SCENE_CHANGE_THRESHOLD = 0.12  # composite score above this = scene change
 DARK_FRAME_BRIGHTNESS = 15  # grayscale mean below this = dark frame
-MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds in ticks
+MERGE_WINDOW_TICKS = 50_000_000  # 5 seconds — merge detections within this window
 
 # Composite weights
-W_MAD = 0.40
-W_SSIM = 0.30
-W_EDGE = 0.20
+W_MAD = 0.45
+W_SSIM = 0.35
+W_EDGE = 0.10
 W_BRIGHTNESS = 0.10
+
+# Timeout for ffmpeg frame extraction
+VISUAL_TIMEOUT_SECONDS = 300  # 5 minutes
 
 
 def _to_rgb_array(img: Image.Image) -> np.ndarray:
-    """Resize image to THUMB_SIZE and return as float32 RGB array (0-255)."""
-    return np.array(img.convert("RGB").resize(THUMB_SIZE, Image.BILINEAR), dtype=np.float32)
+    return np.array(img.convert("RGB").resize(FRAME_SIZE, Image.BILINEAR), dtype=np.float32)
 
 
 def _to_gray_array(img: Image.Image) -> np.ndarray:
-    """Resize image to THUMB_SIZE and return as float64 grayscale array (0-255)."""
-    return np.array(img.convert("L").resize(THUMB_SIZE, Image.BILINEAR), dtype=np.float64)
+    return np.array(img.convert("L").resize(FRAME_SIZE, Image.BILINEAR), dtype=np.float64)
 
 
 def _mean_absolute_difference(a: np.ndarray, b: np.ndarray) -> float:
-    """Pixel-level mean absolute difference, normalized to 0.0-1.0."""
     return float(np.mean(np.abs(a - b)) / 255.0)
 
 
 def _ssim(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute SSIM between two grayscale arrays using numpy.
-
-    Returns a value in [-1, 1], typically [0, 1] for natural images.
-    """
     C1 = (0.01 * 255) ** 2
     C2 = (0.03 * 255) ** 2
-
     mu_x = np.mean(a)
     mu_y = np.mean(b)
     sig_x_sq = np.var(a)
     sig_y_sq = np.var(b)
     sig_xy = np.mean((a - mu_x) * (b - mu_y))
-
     numerator = (2 * mu_x * mu_y + C1) * (2 * sig_xy + C2)
     denominator = (mu_x ** 2 + mu_y ** 2 + C1) * (sig_x_sq + sig_y_sq + C2)
-
     return float(numerator / denominator)
 
 
 def _edge_density(img: Image.Image) -> float:
-    """Compute edge pixel density using PIL edge filter."""
-    gray = img.convert("L").resize(THUMB_SIZE, Image.BILINEAR)
+    gray = img.convert("L").resize(FRAME_SIZE, Image.BILINEAR)
     edges = gray.filter(ImageFilter.FIND_EDGES)
     arr = np.array(edges, dtype=np.float32)
-    # Fraction of pixels above edge threshold (50)
     return float(np.mean(arr > 50))
 
 
-def _analyze_pair(
-    prev_img: Image.Image, curr_img: Image.Image
-) -> dict:
-    """Analyze a pair of adjacent thumbnails and return detection info."""
-    # Signal 1: Mean Absolute Difference
+def _analyze_pair(prev_img: Image.Image, curr_img: Image.Image) -> dict:
+    """Analyze a pair of adjacent frames and return detection info."""
     rgb_prev = _to_rgb_array(prev_img)
     rgb_curr = _to_rgb_array(curr_img)
     mad = _mean_absolute_difference(rgb_prev, rgb_curr)
 
-    # Signal 2: SSIM change
     gray_prev = _to_gray_array(prev_img)
     gray_curr = _to_gray_array(curr_img)
     ssim_val = _ssim(gray_prev, gray_curr)
     ssim_change = 1.0 - max(0.0, ssim_val)
 
-    # Signal 3: Dark frame detection
     brightness = float(np.mean(gray_curr))
     is_dark = brightness < DARK_FRAME_BRIGHTNESS
 
-    # Signal 4: Edge density change
     edge_prev = _edge_density(prev_img)
     edge_curr = _edge_density(curr_img)
     edge_change = abs(edge_curr - edge_prev)
-    # Normalize edge change (typical range 0-0.3)
     edge_change_norm = min(1.0, edge_change / 0.3)
 
-    # Brightness change (normalized)
     brightness_prev = float(np.mean(gray_prev))
     brightness_change = abs(brightness - brightness_prev) / 255.0
 
-    # Composite score
     composite = (
         W_MAD * mad
         + W_SSIM * ssim_change
@@ -107,16 +95,15 @@ def _analyze_pair(
         + W_BRIGHTNESS * brightness_change
     )
 
-    # Classify detection type
     if is_dark:
         det_type = "dark_frame"
         confidence = 0.9
-    elif edge_change_norm > 0.5 and mad < 0.08:
+    elif edge_change_norm > 0.5 and mad < 0.05:
         det_type = "graphics_change"
-        confidence = min(1.0, composite / 0.3)
+        confidence = min(1.0, composite / 0.25)
     else:
         det_type = "scene_change"
-        confidence = min(1.0, composite / 0.3)
+        confidence = min(1.0, composite / 0.25)
 
     return {
         "composite": composite,
@@ -145,15 +132,109 @@ def _cluster_detections(detections: list[dict], window_ticks: int) -> list[dict]
 
 
 async def detect_visual_transitions(
+    local_file_path: str,
+    duration_ticks: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """
+    Extract frames from video via ffmpeg at 0.5fps and compare adjacent
+    frames using multi-signal composite analysis.
+    Returns list of detected transitions with timestamps and confidence.
+    """
+    total_seconds = duration_ticks // TICKS_PER_SECOND
+    expected_frames = int(total_seconds * FRAME_RATE)
+
+    logger.info(
+        f"Starting visual analysis: {total_seconds}s video, "
+        f"extracting ~{expected_frames} frames at {FRAME_RATE}fps"
+    )
+
+    try:
+        detections = await asyncio.wait_for(
+            _run_visual_pipeline(local_file_path, total_seconds, on_progress),
+            timeout=VISUAL_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Visual analysis timed out after {VISUAL_TIMEOUT_SECONDS}s")
+        raise TimeoutError(f"Visual analysis timed out after {VISUAL_TIMEOUT_SECONDS}s")
+
+    # Cluster nearby detections
+    detections = _cluster_detections(detections, MERGE_WINDOW_TICKS)
+
+    logger.info(f"Visual analysis complete: {len(detections)} detections found")
+    return detections
+
+
+async def _run_visual_pipeline(
+    local_file_path: str,
+    total_seconds: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """Extract frames via ffmpeg and analyze adjacent pairs."""
+    # ffmpeg: extract frames as JPEG images piped to stdout
+    # -vf fps=0.5 extracts 1 frame every 2 seconds
+    # Output as raw RGB frames at FRAME_SIZE resolution
+    w, h = FRAME_SIZE
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-i", local_file_path,
+        "-vf", f"fps={FRAME_RATE},scale={w}:{h}",
+        "-pix_fmt", "rgb24",
+        "-f", "rawvideo",
+        "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+
+    frame_bytes = w * h * 3  # RGB24
+    detections: list[dict] = []
+    prev_img: Image.Image | None = None
+    frame_idx = 0
+    seconds_per_frame = 1.0 / FRAME_RATE
+
+    try:
+        while True:
+            raw = await process.stdout.read(frame_bytes)
+            if len(raw) < frame_bytes:
+                break
+
+            # Convert raw RGB bytes to PIL Image
+            img = Image.frombytes("RGB", (w, h), raw)
+
+            if prev_img is not None:
+                result = _analyze_pair(prev_img, img)
+                if result["is_detection"]:
+                    timestamp_secs = frame_idx * seconds_per_frame
+                    detections.append({
+                        "timestamp_ticks": int(timestamp_secs * TICKS_PER_SECOND),
+                        "confidence": result["confidence"],
+                        "type": result["type"],
+                    })
+
+            prev_img = img
+            frame_idx += 1
+
+            if on_progress and total_seconds > 0:
+                current_secs = int(frame_idx * seconds_per_frame)
+                on_progress(current_secs, total_seconds)
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
+    logger.info(f"Processed {frame_idx} frames, found {len(detections)} raw detections")
+    return detections
+
+
+async def detect_visual_transitions_trickplay(
     client: JellyfinClient,
     jellyfin_item_id: str,
     trickplay_meta: dict,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
     """
-    Download trickplay sprite sheets, split into thumbnails,
-    compare adjacent frames using multi-signal composite analysis.
-    Returns list of detected transitions with timestamps and confidence.
+    Fallback: use trickplay thumbnails when local file path is not available.
+    Less accurate due to 10-second intervals between frames.
     """
     tile_w = trickplay_meta["tile_width"]
     tile_h = trickplay_meta["tile_height"]
@@ -171,6 +252,9 @@ async def detect_visual_transitions(
     prev_thumb: Image.Image | None = None
     thumb_index = 0
 
+    # Use a much higher threshold for trickplay (10-second intervals have high baseline change)
+    trickplay_threshold = 0.42
+
     for sheet_idx in range(total_sheets):
         try:
             data = await client._request_bytes(
@@ -183,21 +267,18 @@ async def detect_visual_transitions(
             prev_thumb = None
             continue
 
-        # Extract each thumbnail from the sprite sheet
         thumbs_in_sheet = min(tiles_per_sheet, total_thumbs - sheet_idx * tiles_per_sheet)
         for tile_idx in range(thumbs_in_sheet):
             col = tile_idx % tile_w
             row = tile_idx // tile_w
             x1 = col * thumb_pixel_w
             y1 = row * thumb_pixel_h
-            x2 = x1 + thumb_pixel_w
-            y2 = y1 + thumb_pixel_h
 
-            thumb = sheet_img.crop((x1, y1, x2, y2))
+            thumb = sheet_img.crop((x1, y1, x1 + thumb_pixel_w, y1 + thumb_pixel_h))
 
             if prev_thumb is not None:
                 result = _analyze_pair(prev_thumb, thumb)
-                if result["is_detection"]:
+                if result["is_detection"] or result["composite"] > trickplay_threshold:
                     detections.append({
                         "timestamp_ticks": thumb_index * interval * 10_000,
                         "confidence": result["confidence"],
@@ -207,14 +288,12 @@ async def detect_visual_transitions(
             prev_thumb = thumb
             thumb_index += 1
 
-        # Release the sheet image from memory
         sheet_img.close()
 
         if on_progress:
             on_progress(sheet_idx + 1, total_sheets)
 
-    # Cluster nearby detections
-    detections = _cluster_detections(detections, MERGE_WINDOW_TICKS)
+    detections = _cluster_detections(detections, 300_000_000)  # 30-second window for trickplay
 
-    logger.info(f"Visual analysis complete: {len(detections)} detections found")
+    logger.info(f"Trickplay analysis complete: {len(detections)} detections found")
     return detections
