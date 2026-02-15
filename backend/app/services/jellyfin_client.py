@@ -101,6 +101,20 @@ class JellyfinClient:
             )
         return views
 
+    async def get_virtual_folders(self) -> list[dict]:
+        """Get library virtual folders with their paths."""
+        data = await self._request("GET", "/Library/VirtualFolders")
+        results = []
+        for folder in data:
+            paths = folder.get("Locations", [])
+            results.append({
+                "name": folder.get("Name", ""),
+                "item_id": folder.get("ItemId", ""),
+                "collection_type": folder.get("CollectionType", "unknown"),
+                "paths": paths,
+            })
+        return results
+
     async def get_items(
         self, parent_id: str, start_index: int = 0, limit: int = 100
     ) -> tuple[list[ItemSummary], int]:

@@ -14,9 +14,11 @@
 		deleteLibrary,
 		syncLibrary,
 		getSyncStatus,
+		browseDirs,
 		type JellyfinLibrary,
 		type ConfiguredLibrary,
 		type SyncStatus,
+		type BrowseDirsResult,
 	} from '$lib/api/client';
 
 	const API_BASE = '/api/v1';
@@ -49,6 +51,50 @@
 	let editJellyfinPath = $state('');
 	let editLocalPath = $state('');
 	let savingPathMapping = $state(false);
+
+	// File browser
+	let browseTarget = $state<'add' | 'edit' | null>(null);
+	let browseDirResult = $state<BrowseDirsResult | null>(null);
+	let browseLoading = $state(false);
+
+	async function openBrowser(target: 'add' | 'edit', startPath?: string) {
+		browseTarget = target;
+		browseLoading = true;
+		try {
+			browseDirResult = await browseDirs(startPath || '/');
+		} catch {
+			browseDirResult = { path: '/', parent: null, directories: [] };
+		} finally {
+			browseLoading = false;
+		}
+	}
+
+	async function navigateBrowser(path: string) {
+		browseLoading = true;
+		try {
+			browseDirResult = await browseDirs(path);
+		} catch {
+			// stay on current
+		} finally {
+			browseLoading = false;
+		}
+	}
+
+	function selectBrowserPath() {
+		if (!browseDirResult) return;
+		if (browseTarget === 'add') {
+			localPathInput = browseDirResult.path;
+		} else if (browseTarget === 'edit') {
+			editLocalPath = browseDirResult.path;
+		}
+		browseTarget = null;
+		browseDirResult = null;
+	}
+
+	function closeBrowser() {
+		browseTarget = null;
+		browseDirResult = null;
+	}
 
 	// Sync
 	let syncStatusData = $state<SyncStatus | null>(null);
@@ -181,6 +227,16 @@
 			(jl) => !configuredLibraries.some((cl) => cl.jellyfin_library_id === jl.id)
 		)
 	);
+
+	// Auto-populate jellyfin path when library is selected
+	$effect(() => {
+		if (selectedLibraryId) {
+			const lib = jellyfinLibraries.find((l) => l.id === selectedLibraryId);
+			if (lib?.paths?.length) {
+				jellyfinPathInput = lib.paths[0];
+			}
+		}
+	});
 
 	async function handleAddLibrary() {
 		if (!selectedLibraryId || !promotionId || !promotionName) return;
@@ -515,12 +571,22 @@
 													</div>
 													<div>
 														<label class="block text-xs text-titan-text-muted mb-1">Local Path</label>
-														<input
-															type="text"
-															bind:value={editLocalPath}
-															placeholder="/media"
-															class="w-full bg-titan-surface border border-titan-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-titan-accent"
-														/>
+														<div class="flex gap-2">
+															<input
+																type="text"
+																bind:value={editLocalPath}
+																placeholder="/media"
+																class="flex-1 bg-titan-surface border border-titan-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-titan-accent"
+															/>
+															<button
+																type="button"
+																onclick={() => openBrowser('edit', editLocalPath || '/')}
+																class="px-2 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0"
+																title="Browse directories"
+															>
+																Browse
+															</button>
+														</div>
 													</div>
 												</div>
 												<div class="flex gap-2">
@@ -644,19 +710,30 @@
 												id="jellyfin-path"
 												type="text"
 												bind:value={jellyfinPathInput}
-												placeholder="/data/wrestling"
-												class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent"
+												placeholder="Auto-filled when library selected"
+												readonly={!!jellyfinPathInput && !!selectedLibraryId}
+												class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent {jellyfinPathInput && selectedLibraryId ? 'text-titan-text-muted' : ''}"
 											/>
 										</div>
 										<div>
 											<label for="local-path" class="block text-xs text-titan-text-muted mb-1">Local Mount Path</label>
-											<input
-												id="local-path"
-												type="text"
-												bind:value={localPathInput}
-												placeholder="/media"
-												class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent"
-											/>
+											<div class="flex gap-2">
+												<input
+													id="local-path"
+													type="text"
+													bind:value={localPathInput}
+													placeholder="/media"
+													class="flex-1 bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent"
+												/>
+												<button
+													type="button"
+													onclick={() => openBrowser('add', localPathInput || '/')}
+													class="px-2 py-2 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0"
+													title="Browse directories"
+												>
+													Browse
+												</button>
+											</div>
 										</div>
 									</div>
 									<p class="text-xs text-titan-text-muted">
@@ -877,3 +954,58 @@
 		</button>
 	{/if}
 </div>
+
+<!-- Directory Browser Modal -->
+{#if browseTarget}
+	<div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" role="dialog">
+		<div class="bg-titan-surface border border-titan-border rounded-lg w-full max-w-md max-h-[70vh] flex flex-col">
+			<div class="p-4 border-b border-titan-border flex items-center justify-between shrink-0">
+				<h3 class="font-semibold text-sm">Select Directory</h3>
+				<button onclick={closeBrowser} class="text-titan-text-muted hover:text-titan-text text-lg">&times;</button>
+			</div>
+			{#if browseLoading}
+				<div class="p-4 text-titan-text-muted text-sm">Loading...</div>
+			{:else if browseDirResult}
+				<div class="px-4 py-2 border-b border-titan-border bg-titan-bg flex items-center gap-2 shrink-0">
+					<span class="text-xs font-mono text-titan-text-muted truncate flex-1">{browseDirResult.path}</span>
+				</div>
+				<div class="overflow-y-auto flex-1">
+					{#if browseDirResult.parent}
+						<button
+							onclick={() => navigateBrowser(browseDirResult!.parent!)}
+							class="w-full text-left px-4 py-2 text-sm hover:bg-titan-surface-hover border-b border-titan-border/50 text-titan-text-muted"
+						>
+							..
+						</button>
+					{/if}
+					{#if browseDirResult.directories.length === 0}
+						<p class="px-4 py-3 text-xs text-titan-text-muted">No subdirectories</p>
+					{:else}
+						{#each browseDirResult.directories as dir}
+							<button
+								onclick={() => navigateBrowser(dir.path)}
+								class="w-full text-left px-4 py-2 text-sm hover:bg-titan-surface-hover border-b border-titan-border/50"
+							>
+								{dir.name}/
+							</button>
+						{/each}
+					{/if}
+				</div>
+				<div class="p-3 border-t border-titan-border flex justify-end gap-2 shrink-0">
+					<button
+						onclick={closeBrowser}
+						class="text-xs px-3 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover"
+					>
+						Cancel
+					</button>
+					<button
+						onclick={selectBrowserPath}
+						class="text-xs px-3 py-1.5 bg-titan-accent text-black rounded hover:bg-titan-accent/90"
+					>
+						Select "{browseDirResult.path}"
+					</button>
+				</div>
+			{/if}
+		</div>
+	</div>
+{/if}

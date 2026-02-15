@@ -72,6 +72,13 @@ export interface JellyfinLibrary {
 	id: string;
 	name: string;
 	collection_type: string;
+	paths: string[];
+}
+
+export interface BrowseDirsResult {
+	path: string;
+	parent: string | null;
+	directories: { name: string; path: string }[];
 }
 
 export interface ConfiguredLibrary {
@@ -121,6 +128,10 @@ export function updateLibrary(id: number, data: { jellyfin_path?: string; local_
 
 export function deleteLibrary(id: number): Promise<void> {
 	return request(`/libraries/${id}`, { method: 'DELETE' });
+}
+
+export function browseDirs(path: string = '/'): Promise<BrowseDirsResult> {
+	return request(`/libraries/browse-dirs?path=${encodeURIComponent(path)}`);
 }
 
 // Sync

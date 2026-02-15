@@ -1,6 +1,7 @@
 import asyncio
+from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +22,24 @@ async def list_jellyfin_libraries(client: JellyfinClient = Depends(get_jellyfin_
     """List available libraries from the connected Jellyfin server."""
     try:
         views = await client.get_views()
+        virtual_folders = await client.get_virtual_folders()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch libraries: {e}")
 
-    return [{"id": v.id, "name": v.name, "collection_type": v.collection_type} for v in views]
+    # Build a map of library name -> paths from virtual folders
+    folder_paths: dict[str, list[str]] = {}
+    for vf in virtual_folders:
+        folder_paths[vf["name"]] = vf["paths"]
+
+    return [
+        {
+            "id": v.id,
+            "name": v.name,
+            "collection_type": v.collection_type,
+            "paths": folder_paths.get(v.name, []),
+        }
+        for v in views
+    ]
 
 
 @router.get("", response_model=list[ConfiguredLibraryResponse])
@@ -196,3 +211,23 @@ async def trigger_sync(
 
     background_tasks.add_task(_run_sync, library_id, client)
     return {"message": "Sync started"}
+
+
+@router.get("/browse-dirs")
+async def browse_directories(path: str = Query("/", description="Directory path to list")):
+    """List subdirectories at a given path for the file browser."""
+    target = Path(path)
+    if not target.is_absolute():
+        raise HTTPException(status_code=400, detail="Path must be absolute")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    dirs = []
+    try:
+        for entry in sorted(target.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                dirs.append({"name": entry.name, "path": str(entry)})
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    return {"path": str(target), "parent": str(target.parent) if target != target.parent else None, "directories": dirs}
