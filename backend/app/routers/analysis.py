@@ -4,7 +4,7 @@ import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -109,6 +109,22 @@ async def clear_analysis(
         await db.delete(analysis)
         await db.commit()
     return {"success": True}
+
+
+@router.delete("/analyze/clear-stuck")
+async def clear_stuck_analyses(
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear all non-completed analysis records (stuck from redeploys)."""
+    result = await db.execute(
+        select(AnalysisResult).where(AnalysisResult.status.notin_(["completed"]))
+    )
+    stuck = result.scalars().all()
+    count = len(stuck)
+    for a in stuck:
+        await db.delete(a)
+    await db.commit()
+    return {"cleared": count}
 
 
 @router.post("/libraries/{library_id}/analyze-all")
