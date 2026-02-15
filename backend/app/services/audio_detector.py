@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from typing import Callable
 
 import numpy as np
@@ -15,293 +16,251 @@ CHUNK_SECONDS = 10
 CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SECONDS
 TICKS_PER_SECOND = 10_000_000
 
-# Bell detection params — narrower band centered on wrestling bell fundamentals
-BELL_LOW_HZ = 2500
-BELL_HIGH_HZ = 4000
-BELL_ENERGY_THRESHOLD = 2.0  # multiplier over rolling baseline
-BELL_SPECTRAL_RATIO = 0.06  # bell band fraction of total FFT energy
-BELL_ONSET_RATIO = 3.0  # energy rise between adjacent micro-windows
+# ── Bell detection ──
+# Wider band (2-5kHz) captures more bell varieties and harmonics
+BELL_LOW_HZ = 2000
+BELL_HIGH_HZ = 5000
+BELL_FRAME_SAMPLES = SAMPLE_RATE * 25 // 1000  # 25ms frames = 400 samples
+BELL_HISTORY_FRAMES = 40  # 1 second of history for baseline
+BELL_ONSET_THRESHOLD = 3.0  # frame energy must be 3x median of recent history
+BELL_SPECTRAL_MIN_RATIO = 0.03  # relaxed FFT sanity check (3% in bell band)
+BELL_MIN_GAP_SECS = 0.3  # min gap between distinct bell hits
 BELL_CLUSTER_WINDOW_SECS = 30
 BELL_MIN_CLUSTER = 2
 
-# Music detection params
-MUSIC_SUB_WINDOW_SECS = 2  # sub-window size for comparisons
-MUSIC_ENERGY_THRESHOLD = 1.4  # multiplier over rolling baseline
-MUSIC_SPECTRAL_FLUX_THRESHOLD = 0.3  # normalized spectral flux threshold
-MUSIC_MERGE_WINDOW_TICKS = 300_000_000  # 30 seconds
+# ── Music detection ──
+# Simple sustained energy change — no spectral flux or flatness gates
+MUSIC_WINDOW_SAMPLES = SAMPLE_RATE  # 1-second windows
+MUSIC_HISTORY_WINDOWS = 15  # 15 seconds of history for baseline
+MUSIC_ENERGY_THRESHOLD = 1.5  # 50% above recent median
+MUSIC_SUSTAIN_WINDOWS = 3  # must stay elevated for 3 consecutive seconds
+MUSIC_COOLDOWN_SECS = 30.0  # skip detection for 30s after a music_start
 
-# Timeout for entire audio analysis pipeline
-AUDIO_TIMEOUT_SECONDS = 300  # 5 minutes
+AUDIO_TIMEOUT_SECONDS = 300
 
 
 def _design_bandpass(low_hz: int, high_hz: int, fs: int, order: int = 4):
-    """Design a Butterworth bandpass filter."""
     nyq = fs / 2
-    low = low_hz / nyq
-    high = high_hz / nyq
-    return scipy_signal.butter(order, [low, high], btype="band", output="sos")
+    return scipy_signal.butter(order, [low_hz / nyq, high_hz / nyq], btype="band", output="sos")
 
 
-def _rms(signal_data: np.ndarray) -> float:
-    """Compute RMS energy of a signal."""
-    if len(signal_data) == 0:
+def _rms(data: np.ndarray) -> float:
+    if len(data) == 0:
         return 0.0
-    return float(np.sqrt(np.mean(signal_data.astype(np.float64) ** 2)))
+    return float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
 
 
-def _spectral_flux(prev_spectrum: np.ndarray, curr_spectrum: np.ndarray) -> float:
+class _BellDetector:
+    """Detect bell sounds via onset detection in a bandpass-filtered signal.
+
+    Instead of comparing energy to a rolling EMA baseline (which gets
+    corrupted by the bells themselves), we compare each 25ms frame's
+    energy to the *median* of the previous 1 second of frames. A bell
+    creates a sharp local spike regardless of the ambient level.
+
+    Filter state is preserved across chunks to avoid boundary artifacts.
     """
-    Compute spectral flux — sum of positive differences in magnitude spectrum.
-    High flux = new frequency content appeared (e.g. music started).
-    Normalized by number of bins.
-    """
-    diff = curr_spectrum - prev_spectrum
-    positive_diff = np.maximum(diff, 0)
-    norm = np.sum(curr_spectrum) + 1e-10
-    return float(np.sum(positive_diff) / norm)
 
+    def __init__(self):
+        self.sos = _design_bandpass(BELL_LOW_HZ, BELL_HIGH_HZ, SAMPLE_RATE)
+        self.zi = scipy_signal.sosfilt_zi(self.sos)
+        self.zi_initialized = False
+        self.frame_energies: deque[float] = deque(maxlen=BELL_HISTORY_FRAMES)
+        self.detections: list[dict] = []
+        self.samples_processed = 0
+        self.onset_candidates = 0
+        # Diagnostics: track top onset values to understand signal behavior
+        self.top_onsets: list[tuple[float, float]] = []
 
-def _has_spectral_peaks(fft_vals: np.ndarray, freqs: np.ndarray,
-                         low_hz: float, high_hz: float) -> tuple[bool, float]:
-    """
-    Check for distinct spectral peaks in a frequency band.
-    Returns (has_peaks, peak_prominence).
-    A bell produces clear narrow peaks; broadband noise doesn't.
-    """
-    mask = (freqs >= low_hz) & (freqs <= high_hz)
-    if not mask.any():
-        return False, 0.0
+    def process_chunk(self, samples: np.ndarray):
+        samples_f64 = samples.astype(np.float64)
 
-    band_vals = fft_vals[mask]
-    if len(band_vals) < 5:
-        return False, 0.0
+        # Maintain bandpass filter state across chunks to avoid transients
+        if not self.zi_initialized:
+            self.zi = self.zi * samples_f64[0]
+            self.zi_initialized = True
+        filtered, self.zi = scipy_signal.sosfilt(self.sos, samples_f64, zi=self.zi)
 
-    # Find local maxima
-    band_mean = np.mean(band_vals)
-    if band_mean == 0:
-        return False, 0.0
+        n_frames = len(filtered) // BELL_FRAME_SAMPLES
+        for i in range(n_frames):
+            start = i * BELL_FRAME_SAMPLES
+            frame = filtered[start : start + BELL_FRAME_SAMPLES]
+            energy = _rms(frame)
 
-    # Peak = any bin that's 2x the band mean
-    peaks = band_vals > (band_mean * 2.0)
-    if not peaks.any():
-        return False, 0.0
+            abs_sample = self.samples_processed + start
+            abs_time = abs_sample / SAMPLE_RATE
 
-    # Prominence: ratio of max peak to band mean
-    prominence = float(np.max(band_vals) / band_mean)
-    return True, prominence
+            # Need enough history for a stable median
+            if len(self.frame_energies) >= 20:
+                median_e = float(np.median(list(self.frame_energies)))
+                if median_e > 0:
+                    onset = energy / median_e
 
+                    # Track top onsets for diagnostics
+                    if len(self.top_onsets) < 20 or onset > self.top_onsets[-1][1]:
+                        self.top_onsets.append((abs_time, onset))
+                        self.top_onsets.sort(key=lambda x: -x[1])
+                        self.top_onsets = self.top_onsets[:20]
 
-def _detect_bells_in_chunk(
-    samples: np.ndarray, sos: np.ndarray, chunk_offset_secs: float,
-    rolling_baseline: float,
-) -> tuple[list[dict], int, int]:
-    """
-    Detect bell-like sounds using:
-    1. Bandpass energy spike over rolling baseline
-    2. Onset detection (sharp energy rise in micro-windows)
-    3. Spectral peak verification (narrow peaks, not broadband noise)
-    """
-    filtered = scipy_signal.sosfilt(sos, samples.astype(np.float64))
+                    if onset > BELL_ONSET_THRESHOLD:
+                        self.onset_candidates += 1
 
-    # Compute energy in 0.5-second sub-windows
-    sub_window = SAMPLE_RATE // 2  # 0.5 seconds = 8000 samples
-    energies = []
-    for i in range(0, len(filtered), sub_window):
-        window = filtered[i : i + sub_window]
-        if len(window) > 0:
-            energies.append(_rms(window))
+                        # Min gap from last detection
+                        last_secs = self.detections[-1]["_secs"] if self.detections else -999
+                        if abs_time - last_secs > BELL_MIN_GAP_SECS:
+                            # Lightweight FFT sanity check on surrounding 0.5s
+                            center = start + BELL_FRAME_SAMPLES // 2
+                            fft_start = max(0, center - SAMPLE_RATE // 4)
+                            fft_end = min(len(samples), center + SAMPLE_RATE // 4)
+                            seg = samples[fft_start:fft_end].astype(np.float64)
 
-    if not energies:
-        return [], 0, 0
+                            passed_fft = True
+                            if len(seg) >= 256:
+                                fft_v = np.abs(rfft(seg))
+                                freqs = rfftfreq(len(seg), 1.0 / SAMPLE_RATE)
+                                bell_mask = (freqs >= BELL_LOW_HZ) & (freqs <= BELL_HIGH_HZ)
+                                total = fft_v.sum()
+                                bell = fft_v[bell_mask].sum() if bell_mask.any() else 0
+                                passed_fft = total > 0 and bell / total >= BELL_SPECTRAL_MIN_RATIO
 
-    baseline = rolling_baseline if rolling_baseline > 0 else float(np.median(energies))
-    if baseline == 0:
-        return [], 0, 0
+                            if passed_fft:
+                                conf = min(0.8, onset / 10.0)
+                                conf = max(0.15, conf)
+                                ticks = int(abs_time * TICKS_PER_SECOND)
+                                self.detections.append({
+                                    "timestamp_ticks": ticks,
+                                    "confidence": round(conf, 3),
+                                    "type": "bell",
+                                    "_secs": abs_time,
+                                })
 
-    # Also compute micro-window energies (50ms) for onset detection
-    micro_window = SAMPLE_RATE // 20  # 50ms = 800 samples
-    micro_energies = []
-    for i in range(0, len(filtered), micro_window):
-        window = filtered[i : i + micro_window]
-        if len(window) >= micro_window // 2:
-            micro_energies.append(_rms(window))
+            self.frame_energies.append(energy)
 
-    detections = []
-    candidates = 0
-    passed_spectral = 0
+        self.samples_processed += len(samples)
 
-    for i, energy in enumerate(energies):
-        ratio = energy / baseline
-        if ratio > BELL_ENERGY_THRESHOLD:
-            candidates += 1
-            sub_time_secs = chunk_offset_secs + i * 0.5
-
-            # Onset check: look at micro-windows within this sub-window
-            # A bell has a sharp attack — energy rises quickly in <100ms
-            micro_start = i * 10  # 0.5s / 0.05s = 10 micro-windows per sub-window
-            has_onset = False
-            for j in range(micro_start + 1, min(micro_start + 10, len(micro_energies))):
-                if micro_energies[j - 1] > 0:
-                    onset_ratio = micro_energies[j] / micro_energies[j - 1]
-                    if onset_ratio > BELL_ONSET_RATIO:
-                        has_onset = True
-                        break
-                elif micro_energies[j] > baseline * 0.5:
-                    # Previous micro-window was near-silent, current has energy
-                    has_onset = True
-                    break
-
-            # FFT spectral verification
-            start = i * sub_window
-            end = min(start + sub_window, len(samples))
-            segment = samples[start:end].astype(np.float64)
-            if len(segment) < 256:
-                continue
-
-            fft_vals = np.abs(rfft(segment))
-            freqs = rfftfreq(len(segment), 1.0 / SAMPLE_RATE)
-
-            # Check bell band energy ratio
-            bell_mask = (freqs >= BELL_LOW_HZ) & (freqs <= BELL_HIGH_HZ)
-            if not bell_mask.any():
-                continue
-
-            bell_energy = fft_vals[bell_mask].sum()
-            total_energy = fft_vals.sum()
-            if total_energy == 0:
-                continue
-
-            bell_ratio = bell_energy / total_energy
-            if bell_ratio < BELL_SPECTRAL_RATIO:
-                continue
-
-            # Check for distinct spectral peaks (not just broadband energy)
-            has_peaks, prominence = _has_spectral_peaks(
-                fft_vals, freqs, BELL_LOW_HZ, BELL_HIGH_HZ
+    def finalize(self) -> list[dict]:
+        print(
+            f"[BELL] Onset candidates: {self.onset_candidates}, "
+            f"raw detections: {len(self.detections)}",
+            flush=True,
+        )
+        if self.top_onsets:
+            top5 = self.top_onsets[:5]
+            print(
+                f"[BELL] Top 5 onset strengths: "
+                + ", ".join(f"{t:.1f}s={s:.1f}x" for t, s in top5),
+                flush=True,
             )
+        # Strip internal fields, then cluster
+        for d in self.detections:
+            d.pop("_secs", None)
+        return _cluster_bells(self.detections)
 
-            # Score: combine energy ratio, onset, peak prominence
-            score = ratio / 8.0  # base score from energy
-            if has_onset:
-                score *= 1.5  # boost for sharp transient
-            if has_peaks and prominence > 3.0:
-                score *= 1.3  # boost for clear spectral peaks
 
-            # Require at least one of: onset or spectral peaks
-            if not has_onset and not has_peaks:
+class _MusicDetector:
+    """Detect music starts via sustained broadband energy increase.
+
+    Uses 1-second windows compared to the median of the prior 15 seconds.
+    Music must stay elevated for 3+ consecutive seconds to trigger (filters
+    out brief crowd pops). No spectral flatness or flux gates — those
+    were rejecting legitimate music.
+    """
+
+    def __init__(self):
+        self.window_energies: deque[float] = deque(maxlen=MUSIC_HISTORY_WINDOWS)
+        self.detections: list[dict] = []
+        self.elevated_count = 0
+        self.elevated_start_secs = 0.0
+        self.cooldown_until = 0.0
+        self.samples_processed = 0
+        self.total_windows = 0
+        self.top_ratios: list[tuple[float, float]] = []
+
+    def process_chunk(self, samples: np.ndarray):
+        n_windows = len(samples) // MUSIC_WINDOW_SAMPLES
+        for i in range(n_windows):
+            start = i * MUSIC_WINDOW_SAMPLES
+            window = samples[start : start + MUSIC_WINDOW_SAMPLES]
+            energy = _rms(window)
+
+            abs_sample = self.samples_processed + start
+            abs_time = abs_sample / SAMPLE_RATE
+            self.total_windows += 1
+
+            # Cooldown after a detection
+            if abs_time < self.cooldown_until:
+                self.window_energies.append(energy)
+                self.elevated_count = 0
                 continue
 
-            passed_spectral += 1
-            ticks = int(sub_time_secs * TICKS_PER_SECOND)
-            confidence = min(0.9, score * bell_ratio * 4)
-            confidence = max(0.1, confidence)
-            detections.append({
-                "timestamp_ticks": ticks,
-                "confidence": round(confidence, 3),
-                "type": "bell",
-            })
+            # Need enough history for a stable baseline
+            if len(self.window_energies) >= 10:
+                median_e = float(np.median(list(self.window_energies)))
+                ratio = energy / median_e if median_e > 0 else 0.0
 
-    return detections, candidates, passed_spectral
+                # Track top ratios for diagnostics
+                if len(self.top_ratios) < 20 or ratio > self.top_ratios[-1][1]:
+                    self.top_ratios.append((abs_time, ratio))
+                    self.top_ratios.sort(key=lambda x: -x[1])
+                    self.top_ratios = self.top_ratios[:20]
 
+                if ratio > MUSIC_ENERGY_THRESHOLD:
+                    if self.elevated_count == 0:
+                        self.elevated_start_secs = abs_time
+                    self.elevated_count += 1
 
-def _detect_music_in_chunk(
-    samples: np.ndarray, music_baseline: float, prev_spectrum: np.ndarray | None,
-    chunk_offset_secs: float,
-) -> tuple[list[dict], float, np.ndarray | None]:
-    """
-    Detect music starts using:
-    1. Energy spike over rolling baseline (2-second sub-windows)
-    2. Spectral flux (new frequency content appearing)
-    3. Spectral flatness (music is more tonal than noise)
+                    if self.elevated_count >= MUSIC_SUSTAIN_WINDOWS:
+                        ticks = int(self.elevated_start_secs * TICKS_PER_SECOND)
+                        conf = min(
+                            0.85,
+                            0.3
+                            + (ratio - MUSIC_ENERGY_THRESHOLD) * 0.2
+                            + (self.elevated_count - MUSIC_SUSTAIN_WINDOWS) * 0.05,
+                        )
+                        conf = max(0.2, conf)
+                        self.detections.append({
+                            "timestamp_ticks": ticks,
+                            "confidence": round(conf, 3),
+                            "type": "music_start",
+                        })
+                        self.cooldown_until = abs_time + MUSIC_COOLDOWN_SECS
+                        self.elevated_count = 0
+                else:
+                    self.elevated_count = 0
 
-    Returns (detections, updated_baseline, last_spectrum).
-    """
-    sub_window_samples = SAMPLE_RATE * MUSIC_SUB_WINDOW_SECS
-    detections = []
-    updated_baseline = music_baseline
-    last_spectrum = prev_spectrum
+            self.window_energies.append(energy)
 
-    for i in range(0, len(samples), sub_window_samples):
-        window = samples[i : i + sub_window_samples]
-        if len(window) < SAMPLE_RATE:  # skip < 1 second
-            break
+        self.samples_processed += len(samples)
 
-        window_f64 = window.astype(np.float64)
-        window_energy = _rms(window)
-        sub_offset_secs = chunk_offset_secs + (i / SAMPLE_RATE)
-
-        # Compute magnitude spectrum for this sub-window
-        curr_spectrum = np.abs(rfft(window_f64))
-
-        energy_spike = False
-        flux_spike = False
-
-        # Check 1: Energy ratio over baseline
-        if updated_baseline > 0:
-            energy_ratio = window_energy / updated_baseline
-            if energy_ratio > MUSIC_ENERGY_THRESHOLD:
-                energy_spike = True
-        else:
-            energy_ratio = 0.0
-
-        # Check 2: Spectral flux (new frequency content)
-        if last_spectrum is not None and len(last_spectrum) == len(curr_spectrum):
-            flux = _spectral_flux(last_spectrum, curr_spectrum)
-            if flux > MUSIC_SPECTRAL_FLUX_THRESHOLD:
-                flux_spike = True
-        else:
-            flux = 0.0
-
-        # Need at least one trigger
-        if energy_spike or flux_spike:
-            # Check 3: Spectral flatness — music is more tonal
-            geo_mean = np.exp(np.mean(np.log(curr_spectrum + 1e-10)))
-            arith_mean = np.mean(curr_spectrum)
-            flatness = geo_mean / arith_mean if arith_mean > 0 else 1.0
-
-            # Also check spectral centroid shift — music often shifts the
-            # frequency center compared to crowd noise
-            if flatness < 0.6:
-                ticks = int(sub_offset_secs * TICKS_PER_SECOND)
-                # Confidence from combined signals
-                conf = 0.1
-                if energy_spike:
-                    conf += min(0.4, (energy_ratio - MUSIC_ENERGY_THRESHOLD) * 0.3)
-                if flux_spike:
-                    conf += min(0.35, flux * 0.5)
-                confidence = min(0.85, conf)
-                detections.append({
-                    "timestamp_ticks": ticks,
-                    "confidence": round(confidence, 3),
-                    "type": "music_start",
-                })
-
-        last_spectrum = curr_spectrum
-
-        # Update rolling baseline (slow EMA)
-        if updated_baseline == 0:
-            updated_baseline = window_energy
-        else:
-            updated_baseline = 0.05 * window_energy + 0.95 * updated_baseline
-
-    return detections, updated_baseline, last_spectrum
+    def finalize(self) -> list[dict]:
+        print(
+            f"[MUSIC] Windows processed: {self.total_windows}, "
+            f"raw detections: {len(self.detections)}",
+            flush=True,
+        )
+        if self.top_ratios:
+            top5 = self.top_ratios[:5]
+            print(
+                f"[MUSIC] Top 5 energy ratios: "
+                + ", ".join(f"{t:.1f}s={r:.2f}x" for t, r in top5),
+                flush=True,
+            )
+        return _merge_music(self.detections)
 
 
-def _cluster_bell_hits(detections: list[dict]) -> list[dict]:
-    """
-    Cluster bell hits that occur close together (the "ding ding ding" pattern).
-    Boost confidence for clusters with multiple hits.
-    """
+def _cluster_bells(detections: list[dict]) -> list[dict]:
+    """Cluster bell hits within 30 seconds (ding-ding-ding pattern) and boost confidence."""
     if not detections:
         return []
 
-    bells = [d for d in detections if d["type"] == "bell"]
+    bells = sorted(
+        [d for d in detections if d["type"] == "bell"],
+        key=lambda d: d["timestamp_ticks"],
+    )
     others = [d for d in detections if d["type"] != "bell"]
-
     if not bells:
         return others
 
-    bells.sort(key=lambda d: d["timestamp_ticks"])
     clusters: list[list[dict]] = [[bells[0]]]
     for b in bells[1:]:
         if (
@@ -323,27 +282,27 @@ def _cluster_bell_hits(detections: list[dict]) -> list[dict]:
     return result + others
 
 
-def _cluster_music_detections(detections: list[dict]) -> list[dict]:
-    """Merge nearby music start detections."""
-    music = [d for d in detections if d["type"] == "music_start"]
+def _merge_music(detections: list[dict]) -> list[dict]:
+    """Merge music detections within 30 seconds, keep highest confidence."""
+    music = sorted(
+        [d for d in detections if d["type"] == "music_start"],
+        key=lambda d: d["timestamp_ticks"],
+    )
     others = [d for d in detections if d["type"] != "music_start"]
-
     if not music:
         return others
 
-    music.sort(key=lambda d: d["timestamp_ticks"])
     clusters: list[list[dict]] = [[music[0]]]
     for m in music[1:]:
-        if m["timestamp_ticks"] - clusters[-1][-1]["timestamp_ticks"] <= MUSIC_MERGE_WINDOW_TICKS:
+        if (
+            m["timestamp_ticks"] - clusters[-1][-1]["timestamp_ticks"]
+            <= MUSIC_COOLDOWN_SECS * TICKS_PER_SECOND
+        ):
             clusters[-1].append(m)
         else:
             clusters.append([m])
 
-    result = []
-    for cluster in clusters:
-        best = max(cluster, key=lambda d: d["confidence"])
-        result.append(best)
-
+    result = [max(c, key=lambda d: d["confidence"]) for c in clusters]
     return result + others
 
 
@@ -352,11 +311,10 @@ async def _run_audio_pipeline(
     duration_ticks: int,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
-    """Internal pipeline that processes audio from ffmpeg stdout."""
     total_seconds = duration_ticks // TICKS_PER_SECOND
     chunk_bytes = CHUNK_SAMPLES * 2  # 16-bit = 2 bytes per sample
 
-    print(f"[AUDIO] Starting ffmpeg audio extraction: {local_file_path}, {total_seconds}s", flush=True)
+    print(f"[AUDIO] Starting analysis: {local_file_path}, {total_seconds}s", flush=True)
 
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
@@ -381,18 +339,9 @@ async def _run_audio_pipeline(
 
     stderr_task = asyncio.create_task(_drain_stderr())
 
-    sos = _design_bandpass(BELL_LOW_HZ, BELL_HIGH_HZ, SAMPLE_RATE)
-    all_detections: list[dict] = []
-    music_baseline = 0.0
-    prev_spectrum: np.ndarray | None = None
+    bell = _BellDetector()
+    music = _MusicDetector()
     chunk_idx = 0
-
-    # Rolling baseline for bell detection (exponential moving average of bandpass RMS)
-    rolling_bell_baseline = 0.0
-    ema_alpha = 0.1  # smoothing factor
-
-    total_bell_candidates = 0
-    total_bell_passed = 0
 
     try:
         while True:
@@ -404,32 +353,8 @@ async def _run_audio_pipeline(
                     break
 
             samples = np.frombuffer(raw, dtype=np.int16)
-            chunk_offset_secs = chunk_idx * CHUNK_SECONDS
-
-            # Update rolling baseline with this chunk's bandpass energy
-            filtered = scipy_signal.sosfilt(sos, samples.astype(np.float64))
-            chunk_bell_rms = _rms(filtered)
-            if rolling_bell_baseline == 0:
-                rolling_bell_baseline = chunk_bell_rms
-            else:
-                rolling_bell_baseline = (
-                    ema_alpha * chunk_bell_rms + (1 - ema_alpha) * rolling_bell_baseline
-                )
-
-            # Bell detection
-            bell_hits, candidates, passed = _detect_bells_in_chunk(
-                samples, sos, chunk_offset_secs, rolling_bell_baseline,
-            )
-            all_detections.extend(bell_hits)
-            total_bell_candidates += candidates
-            total_bell_passed += passed
-
-            # Music start detection (2-second sub-windows with spectral flux)
-            music_hits, music_baseline, prev_spectrum = _detect_music_in_chunk(
-                samples, music_baseline, prev_spectrum, chunk_offset_secs
-            )
-            all_detections.extend(music_hits)
-
+            bell.process_chunk(samples)
+            music.process_chunk(samples)
             chunk_idx += 1
 
             if on_progress and total_seconds > 0:
@@ -442,22 +367,15 @@ async def _run_audio_pipeline(
         await process.wait()
         await stderr_task
 
-    print(
-        f"[AUDIO] Processed {chunk_idx} chunks ({chunk_idx * CHUNK_SECONDS}s). "
-        f"Bell candidates: {total_bell_candidates}, passed spectral: {total_bell_passed}. "
-        f"Raw detections: {len(all_detections)}",
-        flush=True,
-    )
+    print(f"[AUDIO] Processed {chunk_idx} chunks ({chunk_idx * CHUNK_SECONDS}s)", flush=True)
 
     if process.returncode != 0:
-        last_lines = stderr_lines[-5:] if stderr_lines else ["(no stderr)"]
-        print(f"[AUDIO] ffmpeg exited with code {process.returncode}: {' | '.join(last_lines)}", flush=True)
+        last = stderr_lines[-5:] if stderr_lines else ["(no stderr)"]
+        print(f"[AUDIO] ffmpeg exit code {process.returncode}: {' | '.join(last)}", flush=True)
 
-    # Cluster and merge detections
-    all_detections = _cluster_bell_hits(all_detections)
-    all_detections = _cluster_music_detections(all_detections)
-
-    return all_detections
+    bell_results = bell.finalize()
+    music_results = music.finalize()
+    return bell_results + music_results
 
 
 async def detect_audio_events(
@@ -467,8 +385,8 @@ async def detect_audio_events(
 ) -> list[dict]:
     """
     Extract audio from a local video file via ffmpeg and analyze for:
-    1. Bell sounds (2.5-4kHz transients with onset detection)
-    2. Music starts (energy + spectral flux)
+    1. Bell sounds (onset detection in 2-5kHz band)
+    2. Music starts (sustained broadband energy increase)
 
     Includes a 5-minute timeout to prevent hanging.
     """
@@ -482,6 +400,6 @@ async def detect_audio_events(
         raise TimeoutError(f"Audio analysis timed out after {AUDIO_TIMEOUT_SECONDS} seconds")
 
     bells = sum(1 for d in all_detections if d["type"] == "bell")
-    music = sum(1 for d in all_detections if d["type"] == "music_start")
-    print(f"[AUDIO] Complete: {bells} bells, {music} music starts (after clustering)", flush=True)
+    music_count = sum(1 for d in all_detections if d["type"] == "music_start")
+    print(f"[AUDIO] Final: {bells} bells, {music_count} music starts", flush=True)
     return all_detections
