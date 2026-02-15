@@ -212,40 +212,30 @@
 				<h1 class="text-sm font-medium truncate">{playerInfo.video.title}</h1>
 			</div>
 			<div class="flex items-center gap-2">
-				{#if status.status === 'completed'}
+				{#if status.status === 'completed' || status.status === 'none' || status.status === 'failed'}
+					{#if status.status === 'failed'}
+						<span class="text-xs text-red-400 truncate max-w-[300px]">{status.error || status.message}</span>
+					{/if}
 					<div class="relative">
 						<button
 							onclick={() => { showRerunMenu = !showRerunMenu; }}
-							class="text-xs px-3 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover flex items-center gap-1"
+							class="text-xs px-3 py-1.5 {status.status === 'none' ? 'bg-titan-accent text-white hover:opacity-90' : 'bg-titan-border hover:bg-titan-surface-hover'} rounded flex items-center gap-1"
 						>
-							Re-run
+							{status.status === 'none' ? 'Run Analysis' : status.status === 'failed' ? 'Retry' : 'Re-run'}
 							<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
 						</button>
 						{#if showRerunMenu}
 							<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
-								<button onclick={() => handleRunAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Re-run All</button>
+								<button onclick={() => handleRunAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
 								<button onclick={() => handleRunAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
 								<button onclick={() => handleRunAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
-								<hr class="border-titan-border my-1" />
-								<button onclick={handleClear} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover text-red-400">Clear Results</button>
+								{#if status.status === 'completed'}
+									<hr class="border-titan-border my-1" />
+									<button onclick={handleClear} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover text-red-400">Clear Results</button>
+								{/if}
 							</div>
 						{/if}
 					</div>
-				{:else if status.status === 'none'}
-					<button
-						onclick={() => handleRunAnalysis('both')}
-						class="text-xs px-3 py-1.5 bg-titan-accent text-white rounded hover:opacity-90"
-					>
-						Run Analysis
-					</button>
-				{:else if status.status === 'failed'}
-					<span class="text-xs text-red-400 truncate max-w-[300px]">{status.error || status.message}</span>
-					<button
-						onclick={() => handleRunAnalysis('both')}
-						class="text-xs px-3 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover"
-					>
-						Retry
-					</button>
 				{/if}
 			</div>
 		</div>
