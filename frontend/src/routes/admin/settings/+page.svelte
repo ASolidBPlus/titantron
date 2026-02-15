@@ -10,7 +10,6 @@
 		getJellyfinLibraries,
 		getConfiguredLibraries,
 		configureLibrary,
-		updateLibrary,
 		deleteLibrary,
 		syncLibrary,
 		getSyncStatus,
@@ -41,24 +40,20 @@
 	let promotionId = $state('');
 	let promotionName = $state('');
 	let promotionAbbr = $state('');
-	let jellyfinPathInput = $state('');
-	let localPathInput = $state('');
 	let addingLibrary = $state(false);
 	let libraryError = $state('');
 
-	// Library path editing
-	let editingLibraryId = $state<number | null>(null);
-	let editJellyfinPath = $state('');
-	let editLocalPath = $state('');
-	let savingPathMapping = $state(false);
+	// Global path mapping
+	let pathMapFrom = $state('');
+	let pathMapTo = $state('');
 
 	// File browser
-	let browseTarget = $state<'add' | 'edit' | null>(null);
+	let showBrowser = $state(false);
 	let browseDirResult = $state<BrowseDirsResult | null>(null);
 	let browseLoading = $state(false);
 
-	async function openBrowser(target: 'add' | 'edit', startPath?: string) {
-		browseTarget = target;
+	async function openBrowser(startPath?: string) {
+		showBrowser = true;
 		browseLoading = true;
 		try {
 			browseDirResult = await browseDirs(startPath || '/');
@@ -82,17 +77,13 @@
 
 	function selectBrowserPath() {
 		if (!browseDirResult) return;
-		if (browseTarget === 'add') {
-			localPathInput = browseDirResult.path;
-		} else if (browseTarget === 'edit') {
-			editLocalPath = browseDirResult.path;
-		}
-		browseTarget = null;
+		pathMapTo = browseDirResult.path;
+		showBrowser = false;
 		browseDirResult = null;
 	}
 
 	function closeBrowser() {
-		browseTarget = null;
+		showBrowser = false;
 		browseDirResult = null;
 	}
 
@@ -172,6 +163,8 @@
 				passwordIsSet = settings.admin_password_is_set;
 				scrapeRateLimit = settings.scrape_rate_limit;
 				scrapeBurst = settings.scrape_burst;
+				pathMapFrom = settings.path_map_from;
+				pathMapTo = settings.path_map_to;
 			}
 			if (connected) {
 				await loadLibraries();
@@ -224,16 +217,6 @@
 		)
 	);
 
-	// Auto-populate jellyfin path when library is selected
-	$effect(() => {
-		if (selectedLibraryId) {
-			const lib = jellyfinLibraries.find((l) => l.id === selectedLibraryId);
-			if (lib?.paths?.length) {
-				jellyfinPathInput = lib.paths[0];
-			}
-		}
-	});
-
 	async function handleAddLibrary() {
 		if (!selectedLibraryId || !promotionId || !promotionName) return;
 		libraryError = '';
@@ -246,15 +229,11 @@
 				cagematch_promotion_id: parseInt(promotionId),
 				promotion_name: promotionName,
 				promotion_abbreviation: promotionAbbr,
-				jellyfin_path: jellyfinPathInput || undefined,
-				local_path: localPathInput || undefined,
 			});
 			selectedLibraryId = '';
 			promotionId = '';
 			promotionName = '';
 			promotionAbbr = '';
-			jellyfinPathInput = '';
-			localPathInput = '';
 			await loadLibraries();
 		} catch (e: any) {
 			libraryError = e.message || 'Failed to add library';
@@ -270,32 +249,6 @@
 			await loadLibraries();
 		} catch (e: any) {
 			libraryError = e.message || 'Failed to delete library';
-		}
-	}
-
-	function startEditPathMapping(lib: ConfiguredLibrary) {
-		editingLibraryId = lib.id;
-		editJellyfinPath = lib.jellyfin_path || '';
-		editLocalPath = lib.local_path || '';
-	}
-
-	function cancelEditPathMapping() {
-		editingLibraryId = null;
-	}
-
-	async function savePathMapping(libraryId: number) {
-		savingPathMapping = true;
-		try {
-			await updateLibrary(libraryId, {
-				jellyfin_path: editJellyfinPath,
-				local_path: editLocalPath,
-			});
-			editingLibraryId = null;
-			await loadLibraries();
-		} catch (e: any) {
-			libraryError = e.message || 'Failed to update path mapping';
-		} finally {
-			savingPathMapping = false;
 		}
 	}
 
@@ -338,6 +291,8 @@
 				jellyfin_public_url: jellyfinPublicUrl,
 				scrape_rate_limit: scrapeRateLimit,
 				scrape_burst: scrapeBurst,
+				path_map_from: pathMapFrom,
+				path_map_to: pathMapTo,
 			};
 			if (newPassword) {
 				updates.admin_password = newPassword;
@@ -552,73 +507,6 @@
 											</div>
 										</div>
 
-										<!-- Path mapping display/edit -->
-										{#if editingLibraryId === lib.id}
-											<div class="mt-3 pt-3 border-t border-titan-border space-y-2">
-												<div class="grid grid-cols-2 gap-3">
-													<div>
-														<label class="block text-xs text-titan-text-muted mb-1">Jellyfin Path</label>
-														<input
-															type="text"
-															bind:value={editJellyfinPath}
-															placeholder="/data/wrestling"
-															class="w-full bg-titan-surface border border-titan-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-titan-accent"
-														/>
-													</div>
-													<div>
-														<label class="block text-xs text-titan-text-muted mb-1">Local Path</label>
-														<div class="flex gap-2">
-															<input
-																type="text"
-																bind:value={editLocalPath}
-																placeholder="/media"
-																class="flex-1 bg-titan-surface border border-titan-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-titan-accent"
-															/>
-															<button
-																type="button"
-																onclick={() => openBrowser('edit', editLocalPath || '/')}
-																class="px-2 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0"
-																title="Browse directories"
-															>
-																Browse
-															</button>
-														</div>
-													</div>
-												</div>
-												<div class="flex gap-2">
-													<button
-														onclick={() => savePathMapping(lib.id)}
-														disabled={savingPathMapping}
-														class="text-xs px-3 py-1 bg-titan-accent text-black rounded hover:bg-titan-accent/90 disabled:opacity-50"
-													>
-														{savingPathMapping ? 'Saving...' : 'Save'}
-													</button>
-													<button
-														onclick={cancelEditPathMapping}
-														class="text-xs px-3 py-1 bg-titan-border rounded hover:bg-titan-surface-hover"
-													>
-														Cancel
-													</button>
-												</div>
-											</div>
-										{:else}
-											<div class="mt-2 flex items-center gap-2 text-xs text-titan-text-muted">
-												{#if lib.jellyfin_path || lib.local_path}
-													<span class="font-mono">{lib.jellyfin_path || '(none)'}</span>
-													<span>&rarr;</span>
-													<span class="font-mono">{lib.local_path || '(none)'}</span>
-												{:else}
-													<span>No path mapping</span>
-												{/if}
-												<button
-													onclick={() => startEditPathMapping(lib)}
-													class="text-titan-accent hover:underline ml-1"
-												>
-													Edit
-												</button>
-											</div>
-										{/if}
-
 										<!-- Sync progress -->
 										{#if syncingLibraryId === lib.id && syncStatusData?.is_running}
 											<div class="mt-3 pt-3 border-t border-titan-border">
@@ -699,42 +587,6 @@
 											Find the ID in the Cagematch URL: cagematch.net/?id=8&nr=<strong>ID</strong>
 										</p>
 									</div>
-									<div class="grid grid-cols-2 gap-3">
-										<div>
-											<label for="jellyfin-path" class="block text-xs text-titan-text-muted mb-1">Jellyfin Library Path</label>
-											<input
-												id="jellyfin-path"
-												type="text"
-												bind:value={jellyfinPathInput}
-												placeholder="Auto-filled when library selected"
-												readonly={!!jellyfinPathInput && !!selectedLibraryId}
-												class="w-full bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent {jellyfinPathInput && selectedLibraryId ? 'text-titan-text-muted' : ''}"
-											/>
-										</div>
-										<div>
-											<label for="local-path" class="block text-xs text-titan-text-muted mb-1">Local Mount Path</label>
-											<div class="flex gap-2">
-												<input
-													id="local-path"
-													type="text"
-													bind:value={localPathInput}
-													placeholder="/media"
-													class="flex-1 bg-titan-bg border border-titan-border rounded px-3 py-2 text-sm focus:outline-none focus:border-titan-accent"
-												/>
-												<button
-													type="button"
-													onclick={() => openBrowser('add', localPathInput || '/')}
-													class="px-2 py-2 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0"
-													title="Browse directories"
-												>
-													Browse
-												</button>
-											</div>
-										</div>
-									</div>
-									<p class="text-xs text-titan-text-muted">
-										Path mapping translates Jellyfin file paths to your local Docker mount for audio analysis.
-									</p>
 									<button
 										type="submit"
 										disabled={addingLibrary || !selectedLibraryId || !promotionId || !promotionName}
@@ -750,6 +602,53 @@
 					{/if}
 				</div>
 			{/if}
+		</section>
+
+		<!-- Section: Path Mapping -->
+		<section class="bg-titan-surface border border-titan-border rounded-lg overflow-hidden">
+			<div class="p-4">
+				<h2 class="text-lg font-semibold mb-1">Path Mapping</h2>
+				<p class="text-xs text-titan-text-muted mb-3">
+					Maps Jellyfin file paths to local container paths for audio analysis. If Jellyfin stores files at <code>/data/wrestling/show.mkv</code> and your container mounts that as <code>/media/wrestling/show.mkv</code>, set the mapping below.
+				</p>
+				<div class="grid grid-cols-2 gap-3 max-w-lg">
+					<div>
+						<label for="path-map-from" class="block text-xs text-titan-text-muted mb-1">Jellyfin path</label>
+						<input
+							id="path-map-from"
+							type="text"
+							bind:value={pathMapFrom}
+							placeholder="/data"
+							class="w-full px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+						/>
+					</div>
+					<div>
+						<label for="path-map-to" class="block text-xs text-titan-text-muted mb-1">Local path</label>
+						<div class="flex gap-2">
+							<input
+								id="path-map-to"
+								type="text"
+								bind:value={pathMapTo}
+								placeholder="/media"
+								class="flex-1 px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+							/>
+							<button
+								type="button"
+								onclick={() => openBrowser(pathMapTo || '/')}
+								class="px-2 py-2 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0"
+								title="Browse directories"
+							>
+								Browse
+							</button>
+						</div>
+					</div>
+				</div>
+				{#if pathMapFrom && pathMapTo}
+					<p class="text-xs text-titan-text-muted mt-2">
+						<span class="font-mono">{pathMapFrom}/...</span> &rarr; <span class="font-mono">{pathMapTo}/...</span>
+					</p>
+				{/if}
+			</div>
 		</section>
 
 		<!-- Section 3: Security -->
@@ -952,7 +851,7 @@
 </div>
 
 <!-- Directory Browser Modal -->
-{#if browseTarget}
+{#if showBrowser}
 	<div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" role="dialog">
 		<div class="bg-titan-surface border border-titan-border rounded-lg w-full max-w-md max-h-[70vh] flex flex-col">
 			<div class="p-4 border-b border-titan-border flex items-center justify-between shrink-0">

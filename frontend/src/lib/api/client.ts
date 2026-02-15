@@ -329,6 +329,8 @@ export interface AppSettings {
 	admin_password_is_set: boolean;
 	scrape_rate_limit: number;
 	scrape_burst: number;
+	path_map_from: string;
+	path_map_to: string;
 }
 
 export interface AppSettingsUpdate {
@@ -336,6 +338,8 @@ export interface AppSettingsUpdate {
 	admin_password?: string;
 	scrape_rate_limit?: number;
 	scrape_burst?: number;
+	path_map_from?: string;
+	path_map_to?: string;
 }
 
 export function getAppSettings(): Promise<AppSettings> {

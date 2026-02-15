@@ -130,14 +130,14 @@ async def run_analysis(video_id: int, client: JellyfinClient) -> None:
             audio_skip_reason: str | None = None
             local_path = None
 
-            # Resolve local file path via library path mapping
-            if video.library_id and video.path:
-                lib_result = await db.execute(
-                    select(Library).where(Library.id == video.library_id)
-                )
-                library = lib_result.scalar_one_or_none()
-                if library:
-                    local_path = library.resolve_local_path(video.path)
+            # Resolve local file path via global path mapping
+            if video.path:
+                from app.config import get_setting
+                path_from = get_setting("path_map_from")
+                path_to = get_setting("path_map_to")
+                if path_from and path_to and video.path.startswith(path_from):
+                    relative = video.path[len(path_from):].lstrip("/")
+                    local_path = os.path.join(path_to, relative)
 
             if local_path and os.path.isfile(local_path):
                 try:

@@ -12,6 +12,8 @@ class SettingsUpdate(BaseModel):
     admin_password: str | None = None
     scrape_rate_limit: float | None = None
     scrape_burst: int | None = None
+    path_map_from: str | None = None
+    path_map_to: str | None = None
 
 
 @router.get("/settings")
@@ -22,6 +24,8 @@ async def get_app_settings():
         "admin_password_is_set": bool(get_setting("admin_password")),
         "scrape_rate_limit": get_setting("scrape_rate_limit"),
         "scrape_burst": get_setting("scrape_burst"),
+        "path_map_from": get_setting("path_map_from"),
+        "path_map_to": get_setting("path_map_to"),
     }
 
 
@@ -40,6 +44,10 @@ async def update_app_settings(body: SettingsUpdate):
         updates["scrape_rate_limit"] = body.scrape_rate_limit
     if body.scrape_burst is not None:
         updates["scrape_burst"] = body.scrape_burst
+    if body.path_map_from is not None:
+        updates["path_map_from"] = body.path_map_from
+    if body.path_map_to is not None:
+        updates["path_map_to"] = body.path_map_to
 
     if updates:
         save_runtime_settings(updates)

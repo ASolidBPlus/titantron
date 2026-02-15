@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # CORS origins (comma-separated, for dev mode)
     cors_origins: str = "http://localhost:5173"
 
+    # Path mapping (Jellyfin path prefix → local path prefix)
+    path_map_from: str = ""
+    path_map_to: str = ""
+
     # Cagematch scraping
     scrape_rate_limit: float = 0.5  # requests per second
     scrape_burst: int = 3
@@ -49,7 +53,7 @@ settings = Settings()
 _runtime_overrides: dict = {}
 
 # Keys that can be changed via the admin settings UI
-CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst"}
+CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst", "path_map_from", "path_map_to"}
 
 
 def _settings_path() -> Path:
