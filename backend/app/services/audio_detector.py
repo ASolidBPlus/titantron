@@ -151,7 +151,6 @@ def _detect_bells(y: np.ndarray) -> list[dict]:
 def _detect_music(
     y: np.ndarray,
     on_progress: Callable[[int, int], None] | None,
-    total_duration: float,
 ) -> list[dict]:
     """Detect music starts via sustained energy increase with tonal character.
 
@@ -199,10 +198,10 @@ def _detect_music(
             continue
 
         baseline = float(np.median(energies[i - history_n : i]))
-        ratio = energies[i] / baseline if baseline > 0 else 0.0
+        ratio = float(energies[i]) / baseline if baseline > 0 else 0.0
 
         # Combined score: louder than baseline AND tonal
-        score = ratio * (1.0 - flatnesses[i])
+        score = float(ratio * (1.0 - float(flatnesses[i])))
 
         # Track top scores for diagnostics
         if len(top_scores) < 20 or score > top_scores[-1][1]:
@@ -217,8 +216,8 @@ def _detect_music(
 
             if elevated_count >= sustain_n:
                 ticks = int(elevated_start * TICKS)
-                conf = min(0.85, 0.3 + (score - MUSIC_SCORE_THRESHOLD) * 0.2)
-                conf = max(0.2, conf)
+                conf = float(min(0.85, 0.3 + (score - MUSIC_SCORE_THRESHOLD) * 0.2))
+                conf = float(max(0.2, conf))
                 detections.append({
                     "timestamp_ticks": ticks,
                     "confidence": round(conf, 3),
@@ -229,9 +228,8 @@ def _detect_music(
         else:
             elevated_count = 0
 
-        if on_progress and i % 60 == 0:
-            progress = int(total_duration * 0.5 + (i / n_frames) * total_duration * 0.5)
-            on_progress(progress, int(total_duration))
+        if on_progress and i % 30 == 0:
+            on_progress(i, n_frames)
 
     # Diagnostics
     print(
@@ -298,8 +296,12 @@ def _cluster_bells(detections: list[dict]) -> list[dict]:
 # ─── Pipeline ────────────────────────────────────────────────────────────────
 
 
-async def _extract_audio(path: str) -> np.ndarray:
-    """Extract mono audio at 22050Hz via ffmpeg."""
+async def _extract_audio(
+    path: str,
+    total_secs: int,
+    on_progress: Callable[[int, int], None] | None,
+) -> np.ndarray:
+    """Extract mono audio at 22050Hz via ffmpeg with progress reporting."""
     process = await asyncio.create_subprocess_exec(
         "ffmpeg", "-nostdin", "-i", path, "-vn",
         "-acodec", "pcm_s16le", "-ar", str(SR), "-ac", "1",
@@ -307,10 +309,43 @@ async def _extract_audio(path: str) -> np.ndarray:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    raw, stderr_data = await process.communicate()
+
+    # Drain stderr in background to prevent pipe deadlock
+    async def _drain_stderr():
+        async for _ in process.stderr:
+            pass
+
+    stderr_task = asyncio.create_task(_drain_stderr())
+
+    # Read in 10-second chunks for progress reporting, accumulate into list
+    chunk_bytes = SR * 2 * 10  # 10 seconds of 16-bit mono
+    chunks: list[bytes] = []
+    bytes_read = 0
+
+    try:
+        while True:
+            try:
+                data = await process.stdout.readexactly(chunk_bytes)
+            except asyncio.IncompleteReadError as e:
+                data = e.partial
+                if data:
+                    chunks.append(data)
+                break
+            chunks.append(data)
+            bytes_read += len(data)
+
+            if on_progress and total_secs > 0:
+                secs_read = bytes_read // (SR * 2)
+                on_progress(secs_read, total_secs)
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        await stderr_task
+
+    raw = b"".join(chunks)
     if process.returncode != 0:
-        err = stderr_data.decode("utf-8", errors="replace")[-500:]
-        print(f"[AUDIO] ffmpeg error (code {process.returncode}): {err}", flush=True)
+        print(f"[AUDIO] ffmpeg exited with code {process.returncode}", flush=True)
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
@@ -321,25 +356,17 @@ async def _pipeline(
 ) -> list[dict]:
     print(f"[AUDIO] Starting analysis: {path} ({total_secs}s)", flush=True)
 
-    y = await _extract_audio(path)
+    y = await _extract_audio(path, total_secs, on_progress)
     duration = len(y) / SR
     print(f"[AUDIO] Loaded {duration:.1f}s ({len(y)} samples at {SR}Hz)", flush=True)
 
-    if on_progress:
-        on_progress(int(duration * 0.1), int(duration))
-
     bells = _detect_bells(y)
-    if on_progress:
-        on_progress(int(duration * 0.5), int(duration))
 
-    music = _detect_music(y, on_progress, duration)
+    music = _detect_music(y, on_progress)
 
     n_b = sum(1 for d in bells if d["type"] == "bell")
     n_m = len(music)
     print(f"[AUDIO] Final: {n_b} bells, {n_m} music starts", flush=True)
-
-    if on_progress:
-        on_progress(int(duration), int(duration))
 
     return bells + music
 
