@@ -210,16 +210,12 @@
 	}
 
 	async function loadLibraries() {
-		try {
-			const [jl, cl] = await Promise.all([
-				getJellyfinLibraries(),
-				getConfiguredLibraries(),
-			]);
-			jellyfinLibraries = jl;
-			configuredLibraries = cl;
-		} catch {
-			// ignore
-		}
+		const [jl, cl] = await Promise.allSettled([
+			getJellyfinLibraries(),
+			getConfiguredLibraries(),
+		]);
+		if (jl.status === 'fulfilled') jellyfinLibraries = jl.value;
+		if (cl.status === 'fulfilled') configuredLibraries = cl.value;
 	}
 
 	let availableLibraries = $derived(
