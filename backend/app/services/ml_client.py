@@ -54,10 +54,10 @@ async def classify_audio(
     local_path: str,
     duration_ticks: int,
     on_progress: Callable[..., None] | None = None,
-) -> list[dict]:
+) -> dict:
     """Extract audio via ffmpeg and send to ML container for classification.
 
-    Returns list of detection dicts with timestamp_ticks, confidence, type.
+    Returns dict with keys: spectrum, detections, window_secs.
     """
     url = _get_ml_url()
     if not url:
@@ -93,12 +93,14 @@ async def classify_audio(
             result = await resp.json()
 
     # Step 3: Done
+    spectrum = result.get("spectrum", [])
     detections = result.get("detections", [])
+    window_secs = result.get("window_secs", 30)
     if on_progress:
-        on_progress(3, 3, f"ML classification complete: {len(detections)} detections")
+        on_progress(3, 3, f"ML classification complete: {len(spectrum)} windows, {len(detections)} bell detections")
 
-    logger.info(f"ML classification returned {len(detections)} detections")
-    return detections
+    logger.info(f"ML classification returned {len(spectrum)} spectrum windows, {len(detections)} bell detections")
+    return {"spectrum": spectrum, "detections": detections, "window_secs": window_secs}
 
 
 async def _extract_audio(local_path: str) -> bytes:

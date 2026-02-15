@@ -11,7 +11,7 @@
 		reportPlaybackProgress,
 		reportPlaybackStopped,
 	} from '$lib/api/client';
-	import type { PlayerInfo, Chapter, WrestlingMatch, Detection } from '$lib/types';
+	import type { PlayerInfo, Chapter, WrestlingMatch } from '$lib/types';
 	import PlayerControls from '$lib/components/player/PlayerControls.svelte';
 	import DetectionFilmstrip from '$lib/components/player/DetectionFilmstrip.svelte';
 
@@ -29,7 +29,7 @@
 	let chapters = $state<Chapter[]>([]);
 	let progressInterval: ReturnType<typeof setInterval> | null = null;
 	let markingMatch = $state<number | null>(null);
-	let detections = $state<Detection[]>([]);
+	let detections = $state<import('$lib/types').Detection[]>([]);
 
 	let sortedChapters = $derived(
 		[...chapters].sort((a, b) => a.start_ticks - b.start_ticks)
@@ -216,15 +216,6 @@
 		chapters = await getChapters(playerInfo.video.id);
 	}
 
-	async function handleAcceptChapter(ticks: number, title: string) {
-		try {
-			await createChapter(videoId, { title, start_ticks: ticks });
-			await reloadChapters();
-		} catch (e) {
-			console.error('Failed to create chapter:', e);
-		}
-	}
-
 	function handleBeforeUnload() {
 		if (playerInfo && videoEl) {
 			reportPlaybackStopped(videoId, {
@@ -308,7 +299,6 @@
 							durationTicks={playerInfo.video.duration_ticks}
 							currentTimeTicks={Math.floor(currentTime * 10_000_000)}
 							onSeekTo={(ticks) => { videoEl.currentTime = ticks / 10_000_000; }}
-							onAcceptChapter={handleAcceptChapter}
 							onDetectionsReady={(d) => { detections = d; }}
 						/>
 					</div>

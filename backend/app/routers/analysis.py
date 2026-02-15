@@ -87,9 +87,14 @@ async def get_analysis_results(
     if not analysis or analysis.status != "completed":
         raise HTTPException(status_code=404, detail="No completed analysis")
 
+    # Parse audio spectrum (new field, NULL for old results)
+    spectrum_data = json.loads(analysis.audio_spectrum or "{}") if analysis.audio_spectrum else {}
+
     return {
         "visual": json.loads(analysis.visual_detections or "[]"),
         "audio": json.loads(analysis.audio_detections or "[]"),
+        "audio_spectrum": spectrum_data.get("spectrum", []),
+        "audio_window_secs": spectrum_data.get("window_secs", 30),
         "completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None,
         "audio_skip_reason": analysis.audio_skip_reason,
     }

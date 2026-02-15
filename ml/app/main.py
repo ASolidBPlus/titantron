@@ -28,18 +28,23 @@ _model_loaded = False
 SAMPLE_RATE = 32000  # PANNs expects 32kHz
 TICKS = 10_000_000
 
-# AudioSet music classes we care about.
-# Full AudioSet ontology: https://research.google.com/audioset/ontology/index.html
+# AudioSet music classes — used for continuous spectrum (no threshold filtering).
 MUSIC_CLASSES = {
-    "Music": 0.4,
-    "Musical instrument": 0.4,
-    "Singing": 0.4,
-    "Song": 0.4,
-    "Theme music": 0.35,
+    "Music",
+    "Musical instrument",
+    "Singing",
+    "Song",
+    "Theme music",
+}
+
+# Bell classes — discrete events, only emitted above threshold.
+BELL_CLASSES = {
+    "Bell": 0.30,
+    "Cowbell": 0.35,
+    "Chime": 0.40,
 }
 
 DEFAULT_WINDOW_SECS = 30
-DEFAULT_MERGE_GAP_SECS = 60
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -74,7 +79,7 @@ async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
     Expects raw PCM float32, mono, 32kHz as the request body.
     Query params:
         window_secs: analysis window size (default 30, use 2-10 for GPU)
-    Returns JSON with detected music_start events.
+    Returns JSON with spectrum (every window) + bell detections.
     """
     # Stream the body in chunks to handle large files (1GB+)
     chunks = []
@@ -83,10 +88,9 @@ async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
     body = b"".join(chunks)
 
     if len(body) < 4:
-        return {"detections": [], "error": "Empty audio data"}
+        return {"spectrum": [], "detections": [], "window_secs": window_secs}
 
     window_secs = max(2, min(window_secs, 60))
-    merge_gap_secs = max(window_secs * 2, DEFAULT_MERGE_GAP_SECS)
 
     audio = np.frombuffer(body, dtype=np.float32)
     total_samples = len(audio)
@@ -98,13 +102,17 @@ async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
 
     window_samples = window_secs * SAMPLE_RATE
 
-    # Build label index once
-    music_indices = {}
+    # Build label indices once
+    music_indices: list[int] = []
+    bell_indices: dict[int, tuple[str, float]] = {}
     for i, label in enumerate(model.labels):
         if label in MUSIC_CLASSES:
-            music_indices[i] = (label, MUSIC_CLASSES[label])
+            music_indices.append(i)
+        if label in BELL_CLASSES:
+            bell_indices[i] = (label, BELL_CLASSES[label])
 
-    raw_music_windows: list[dict] = []
+    spectrum: list[dict] = []
+    detections: list[dict] = []
     offset = 0
     window_count = 0
 
@@ -122,54 +130,27 @@ async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
 
         window_start_secs = offset / SAMPLE_RATE
 
-        # Find best music class above threshold
-        best_prob = 0.0
-        best_label = ""
-        for idx, (label, threshold) in music_indices.items():
-            if probs[idx] > threshold and probs[idx] > best_prob:
-                best_prob = probs[idx]
-                best_label = label
+        # Spectrum: max music probability across all music classes
+        max_music = float(max(probs[idx] for idx in music_indices)) if music_indices else 0.0
+        spectrum.append({"t": round(window_start_secs), "music": round(max_music, 3)})
 
-        if best_prob > 0:
-            raw_music_windows.append({
-                "timestamp_secs": window_start_secs,
-                "confidence": float(best_prob),
-                "label": best_label,
-            })
+        # Bell detections: discrete events above threshold
+        for idx, (label, threshold) in bell_indices.items():
+            if probs[idx] > threshold:
+                detections.append({
+                    "timestamp_ticks": int(window_start_secs * TICKS),
+                    "type": "bell",
+                    "confidence": round(float(probs[idx]), 3),
+                    "label": label,
+                })
 
         offset += window_samples  # non-overlapping
         window_count += 1
 
-    logger.info(f"Inference done: {window_count} windows, {len(raw_music_windows)} music detections")
+    logger.info(f"Inference done: {window_count} windows, {len(detections)} bell detections")
 
-    # ── Post-processing: merge consecutive music windows ──
-
-    detections: list[dict] = []
-
-    if raw_music_windows:
-        raw_music_windows.sort(key=lambda e: e["timestamp_secs"])
-        groups: list[list[dict]] = []
-        current_group: list[dict] = [raw_music_windows[0]]
-
-        for window in raw_music_windows[1:]:
-            if window["timestamp_secs"] - current_group[-1]["timestamp_secs"] <= merge_gap_secs:
-                current_group.append(window)
-            else:
-                groups.append(current_group)
-                current_group = [window]
-        groups.append(current_group)
-
-        for group in groups:
-            best = max(group, key=lambda e: e["confidence"])
-            detections.append({
-                "timestamp_ticks": int(group[0]["timestamp_secs"] * TICKS),
-                "confidence": best["confidence"],
-                "type": "music_start",
-                "label": best["label"],
-            })
-
-    detections.sort(key=lambda d: d["timestamp_ticks"])
-
-    logger.info(f"Final: {len(detections)} music_start detections")
-
-    return {"detections": detections}
+    return {
+        "spectrum": spectrum,
+        "detections": detections,
+        "window_secs": window_secs,
+    }

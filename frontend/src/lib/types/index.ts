@@ -182,6 +182,11 @@ export interface Detection {
 	type: 'scene_change' | 'dark_frame' | 'graphics_change' | 'bell' | 'music_start';
 }
 
+export interface SpectrumPoint {
+	t: number;
+	music: number;
+}
+
 export interface AnalysisStatus {
 	status: 'none' | 'running_visual' | 'running_audio' | 'completed' | 'failed';
 	progress?: number;
@@ -194,6 +199,8 @@ export interface AnalysisStatus {
 export interface AnalysisResults {
 	visual: Detection[];
 	audio: Detection[];
+	audio_spectrum: SpectrumPoint[];
+	audio_window_secs: number;
 	completed_at: string | null;
 	audio_skip_reason?: string;
 }

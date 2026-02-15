@@ -133,6 +133,7 @@ async def _run_analysis_pipeline(
                 analysis.visual_detections = None
             if phase in ("both", "audio"):
                 analysis.audio_detections = None
+                analysis.audio_spectrum = None
                 analysis.audio_skip_reason = None
             analysis.completed_at = None
         else:
@@ -231,6 +232,8 @@ async def _run_analysis_pipeline(
             })
 
             audio_detections: list[dict] = []
+            audio_spectrum: list[dict] = []
+            audio_window_secs: int = 30
             audio_skip_reason: str | None = None
 
             ml_enabled = get_setting("ml_audio_enabled")
@@ -269,17 +272,21 @@ async def _run_analysis_pipeline(
                                 update["message"] = f"Analyzing audio ({current}/{total}s)..."
                             _analysis_progress[video_id].update(update)
 
-                        audio_detections = await classify_audio(
+                        audio_result = await classify_audio(
                             local_path,
                             video.duration_ticks or 0,
                             on_progress=on_audio_progress,
                         )
+                        audio_detections = audio_result["detections"]
+                        audio_spectrum = audio_result["spectrum"]
+                        audio_window_secs = audio_result["window_secs"]
                     except Exception as e:
                         logger.error(f"ML audio detection failed: {e}")
                         audio_skip_reason = f"error:{e}"
                         _analysis_progress[video_id]["message"] = f"Audio detection failed: {e}"
 
             analysis.audio_detections = json.dumps(audio_detections)
+            analysis.audio_spectrum = json.dumps({"spectrum": audio_spectrum, "window_secs": audio_window_secs})
             analysis.audio_skip_reason = audio_skip_reason
 
         # Save final results

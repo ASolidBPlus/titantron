@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { TrickplayInfo, Detection, AnalysisStatus, AnalysisResults } from '$lib/types';
+	import type { TrickplayInfo, Detection, AnalysisStatus, AnalysisResults, SpectrumPoint } from '$lib/types';
 	import { startAnalysis, getAnalysisStatus, getAnalysisResults, clearAnalysis } from '$lib/api/client';
 
 	interface Props {
@@ -9,7 +9,6 @@
 		durationTicks: number;
 		currentTimeTicks: number;
 		onSeekTo: (ticks: number) => void;
-		onAcceptChapter: (ticks: number, title: string) => void;
 		onDetectionsReady?: (detections: Detection[]) => void;
 	}
 
@@ -19,7 +18,6 @@
 		durationTicks,
 		currentTimeTicks,
 		onSeekTo,
-		onAcceptChapter,
 		onDetectionsReady,
 	}: Props = $props();
 
@@ -28,10 +26,10 @@
 	let zoomLevel = $state(1);
 	let scrollContainer = $state<HTMLDivElement>(null!);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	let selectedDetection = $state<Detection | null>(null);
-	let popoverX = $state(0);
-	let popoverY = $state(0);
 	let showAnalysisMenu = $state(false);
+
+	// Spectrum tooltip state
+	let spectrumTooltip = $state<{ x: number; y: number; time: string; music: number } | null>(null);
 
 	// Thumbnail dimensions (width/height from Jellyfin are individual thumb size)
 	const thumbPixelW = trickplay.width;
@@ -45,15 +43,34 @@
 	const scale = displayH / thumbPixelH;
 	const displayW = Math.round(thumbPixelW * scale);
 
+	const SPECTRUM_HEIGHT = 14;
+
 	// Filmstrip dimensions
 	let filmstripWidth = $derived(trickplay.thumbnail_count * displayW * zoomLevel);
 
-	// All detections merged and sorted
+	// Visual detections only (scene_change, dark_frame, graphics_change) — shown as subtle markers on filmstrip
+	let visualDetections = $derived<Detection[]>(
+		results?.visual ?? []
+	);
+
+	// Bell detections — shown as amber lines on spectrum strip
+	let bellDetections = $derived<Detection[]>(
+		results?.audio.filter(d => d.type === 'bell') ?? []
+	);
+
+	// All detections for parent notification
 	let allDetections = $derived<Detection[]>(
 		results
 			? [...results.visual, ...results.audio].sort((a, b) => a.timestamp_ticks - b.timestamp_ticks)
 			: []
 	);
+
+	// Spectrum data
+	let spectrum = $derived<SpectrumPoint[]>(results?.audio_spectrum ?? []);
+	let windowSecs = $derived(results?.audio_window_secs ?? 30);
+
+	// Duration in seconds for spectrum calculations
+	let durationSecs = $derived(durationTicks / 10_000_000);
 
 	// Notify parent when detections change
 	$effect(() => {
@@ -97,31 +114,7 @@
 			case 'scene_change': return '#3b82f6';
 			case 'dark_frame': return '#6b7280';
 			case 'graphics_change': return '#a855f7';
-			case 'bell': return '#f59e0b';
-			case 'music_start': return '#22c55e';
 			default: return '#8888a0';
-		}
-	}
-
-	function markerLabel(type: string): string {
-		switch (type) {
-			case 'scene_change': return 'Scene Change';
-			case 'dark_frame': return 'Dark Frame';
-			case 'graphics_change': return 'Graphics Change';
-			case 'bell': return 'Bell';
-			case 'music_start': return 'Music Start';
-			default: return type;
-		}
-	}
-
-	function defaultTitle(type: string): string {
-		switch (type) {
-			case 'bell': return 'Match Start';
-			case 'music_start': return 'Entrance';
-			case 'scene_change': return 'Segment Break';
-			case 'dark_frame': return 'Segment Break';
-			case 'graphics_change': return 'Graphics';
-			default: return 'Chapter';
 		}
 	}
 
@@ -134,27 +127,54 @@
 		return `${m}:${String(s).padStart(2, '0')}`;
 	}
 
-	function handleMarkerClick(detection: Detection, e: MouseEvent) {
-		e.stopPropagation();
-		onSeekTo(detection.timestamp_ticks);
-		if (selectedDetection === detection) {
-			selectedDetection = null;
-		} else {
-			selectedDetection = detection;
-			const target = e.currentTarget as HTMLElement;
-			const rect = target.getBoundingClientRect();
-			const containerRect = scrollContainer?.getBoundingClientRect();
-			if (containerRect) {
-				popoverX = rect.left - containerRect.left + rect.width / 2;
-				popoverY = rect.top - containerRect.top;
-			}
-		}
+	function formatTimeSecs(secs: number): string {
+		const h = Math.floor(secs / 3600);
+		const m = Math.floor((secs % 3600) / 60);
+		const s = Math.floor(secs % 60);
+		if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+		return `${m}:${String(s).padStart(2, '0')}`;
 	}
 
-	function handleAccept() {
-		if (!selectedDetection) return;
-		onAcceptChapter(selectedDetection.timestamp_ticks, defaultTitle(selectedDetection.type));
-		selectedDetection = null;
+	function handleSpectrumClick(e: MouseEvent) {
+		const target = e.currentTarget as HTMLElement;
+		const rect = target.getBoundingClientRect();
+		const scrollLeft = scrollContainer?.scrollLeft ?? 0;
+		const clickX = e.clientX - rect.left + scrollLeft;
+		const fraction = clickX / filmstripWidth;
+		const ticks = Math.floor(fraction * durationTicks);
+		onSeekTo(Math.max(0, Math.min(ticks, durationTicks)));
+	}
+
+	function handleSpectrumHover(e: MouseEvent) {
+		if (spectrum.length === 0) return;
+		const target = e.currentTarget as HTMLElement;
+		const rect = target.getBoundingClientRect();
+		const scrollLeft = scrollContainer?.scrollLeft ?? 0;
+		const hoverX = e.clientX - rect.left + scrollLeft;
+		const fraction = hoverX / filmstripWidth;
+		const timeSecs = fraction * durationSecs;
+
+		// Find closest spectrum window
+		let closest = spectrum[0];
+		let minDist = Math.abs(timeSecs - closest.t);
+		for (const pt of spectrum) {
+			const dist = Math.abs(timeSecs - pt.t);
+			if (dist < minDist) {
+				minDist = dist;
+				closest = pt;
+			}
+		}
+
+		spectrumTooltip = {
+			x: e.clientX - rect.left,
+			y: rect.top - (scrollContainer?.getBoundingClientRect().top ?? 0) - 4,
+			time: formatTimeSecs(timeSecs),
+			music: closest.music,
+		};
+	}
+
+	function handleSpectrumLeave() {
+		spectrumTooltip = null;
 	}
 
 	async function handleStartAnalysis(phase: 'both' | 'visual' | 'audio' = 'both') {
@@ -172,7 +192,6 @@
 		await clearAnalysis(videoId);
 		status = { status: 'none' };
 		results = null;
-		selectedDetection = null;
 	}
 
 	function startPolling() {
@@ -200,7 +219,6 @@
 	}
 
 	onMount(async () => {
-		// Check for existing analysis results
 		try {
 			status = await getAnalysisStatus(videoId);
 			if (status.status === 'completed') {
@@ -294,11 +312,12 @@
 			<div class="flex items-center gap-2">
 				<!-- Legend -->
 				<div class="flex items-center gap-2 text-[10px] text-titan-text-muted">
-					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #3b82f6"></span>Scene</span>
-					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #6b7280"></span>Dark</span>
-					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #a855f7"></span>Graphics</span>
-					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #f59e0b"></span>Bell</span>
-					<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #22c55e"></span>Music</span>
+					{#if spectrum.length > 0}
+						<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #22c55e"></span>Music</span>
+					{/if}
+					{#if bellDetections.length > 0}
+						<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #f59e0b"></span>Bell</span>
+					{/if}
 				</div>
 				<span class="text-xs text-titan-text-muted">|</span>
 				<!-- Zoom controls -->
@@ -337,11 +356,6 @@
 						</div>
 					{/if}
 				</div>
-				<a
-					href="/player/{videoId}/detect"
-					class="text-xs px-2 py-1 text-titan-accent hover:underline"
-					title="Open full detection view"
-				>Detection View</a>
 			</div>
 		{:else if status.status === 'failed'}
 			<span class="text-xs text-red-400 truncate">{status.error || status.message || 'Analysis failed'}</span>
@@ -364,14 +378,14 @@
 		{/if}
 	</div>
 
-	<!-- Filmstrip -->
+	<!-- Filmstrip + Spectrum -->
 	{#if status.status === 'completed' && results}
 		<div
 			class="relative overflow-x-auto overflow-y-hidden rounded-b-lg"
 			bind:this={scrollContainer}
 			onscroll={handleScroll}
 		>
-			<div class="relative" style="width: {filmstripWidth}px; height: {displayH + 16}px">
+			<div class="relative" style="width: {filmstripWidth}px; height: {displayH + SPECTRUM_HEIGHT + 16}px">
 				<!-- Thumbnail strip -->
 				<div class="flex" style="height: {displayH}px">
 					{#each Array(trickplay.thumbnail_count) as _, i}
@@ -397,33 +411,84 @@
 					{/each}
 				</div>
 
-				<!-- Detection markers -->
-				{#each allDetections as detection}
+				<!-- Visual detection markers (subtle, on filmstrip) -->
+				{#each visualDetections as detection}
 					{@const leftPx = (detection.timestamp_ticks / durationTicks) * filmstripWidth}
-					<button
-						class="absolute top-0 w-1 cursor-pointer hover:w-2 transition-all z-10"
+					<div
+						class="absolute top-0 w-0.5 pointer-events-none"
 						style="left: {leftPx}px; height: {displayH}px;
 							background-color: {markerColor(detection.type)};
-							opacity: {0.3 + detection.confidence * 0.5};"
-						title="{markerLabel(detection.type)} ({(detection.confidence * 100).toFixed(0)}%) at {formatTime(detection.timestamp_ticks)}"
-						onclick={(e) => handleMarkerClick(detection, e)}
-					></button>
+							opacity: {0.2 + detection.confidence * 0.3};"
+					></div>
 				{/each}
 
-				<!-- Current playback position -->
+				<!-- Music spectrum strip -->
+				{#if spectrum.length > 0}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="relative cursor-pointer"
+						style="height: {SPECTRUM_HEIGHT}px; width: {filmstripWidth}px; top: 0;"
+						onclick={handleSpectrumClick}
+						onmousemove={handleSpectrumHover}
+						onmouseleave={handleSpectrumLeave}
+					>
+						<!-- Render spectrum segments -->
+						{#each spectrum as point, i}
+							{@const segStartFrac = point.t / durationSecs}
+							{@const nextT = i < spectrum.length - 1 ? spectrum[i + 1].t : point.t + windowSecs}
+							{@const segWidthFrac = (nextT - point.t) / durationSecs}
+							<div
+								class="absolute top-0"
+								style="left: {segStartFrac * 100}%;
+									width: {segWidthFrac * 100}%;
+									height: {SPECTRUM_HEIGHT}px;
+									background-color: rgba(34, 197, 94, {point.music * 0.8});"
+							></div>
+						{/each}
+
+						<!-- Bell markers on spectrum -->
+						{#each bellDetections as bell}
+							{@const leftPx = (bell.timestamp_ticks / durationTicks) * filmstripWidth}
+							<div
+								class="absolute top-0 w-0.5"
+								style="left: {leftPx}px; height: {SPECTRUM_HEIGHT}px;
+									background-color: #f59e0b;"
+								title="Bell ({(bell.confidence * 100).toFixed(0)}%) at {formatTime(bell.timestamp_ticks)}"
+							></div>
+						{/each}
+					</div>
+				{/if}
+
+				<!-- Current playback position (spans filmstrip + spectrum) -->
 				<div
 					class="absolute top-0 w-0.5 bg-titan-accent z-20 pointer-events-none"
-					style="left: {(currentTimeTicks / durationTicks) * filmstripWidth}px; height: {displayH}px"
+					style="left: {(currentTimeTicks / durationTicks) * filmstripWidth}px; height: {displayH + (spectrum.length > 0 ? SPECTRUM_HEIGHT : 0)}px"
 				></div>
 
-				<!-- Marker info bar at bottom -->
+				<!-- Spectrum tooltip -->
+				{#if spectrumTooltip}
+					<div
+						class="absolute z-30 bg-titan-bg border border-titan-border rounded px-2 py-1 -translate-x-1/2 pointer-events-none text-[10px] whitespace-nowrap"
+						style="left: {spectrumTooltip.x}px; top: {spectrumTooltip.y - 28}px"
+					>
+						<span class="text-titan-text">{spectrumTooltip.time}</span>
+						<span class="text-titan-text-muted mx-1">&middot;</span>
+						<span style="color: rgba(34, 197, 94, {0.5 + spectrumTooltip.music * 0.5})">{(spectrumTooltip.music * 100).toFixed(0)}% music</span>
+						<span class="text-titan-text-muted ml-1">click to seek</span>
+					</div>
+				{/if}
+
+				<!-- Info bar at bottom -->
 				<div class="flex items-center h-4 px-1 text-[10px] text-titan-text-muted">
-					{allDetections.length} detections found
-					{#if results.visual.length > 0}
-						&middot; {results.visual.length} visual
+					{#if spectrum.length > 0}
+						{spectrum.length} windows ({windowSecs}s)
 					{/if}
-					{#if results.audio.length > 0}
-						&middot; {results.audio.length} audio
+					{#if bellDetections.length > 0}
+						&middot; {bellDetections.length} bells
+					{/if}
+					{#if visualDetections.length > 0}
+						&middot; {visualDetections.length} visual
 					{/if}
 					{#if audioSkipReason}
 						<span class="ml-2 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
@@ -432,39 +497,6 @@
 					{/if}
 				</div>
 			</div>
-
-			<!-- Popover for selected detection -->
-			{#if selectedDetection}
-				<div
-					class="absolute z-30 bg-titan-bg border border-titan-border rounded-lg shadow-lg p-3 -translate-x-1/2"
-					style="left: {popoverX}px; top: {popoverY - 100}px; min-width: 180px"
-				>
-					<div class="flex items-center gap-2 mb-2">
-						<span
-							class="w-2.5 h-2.5 rounded-full"
-							style="background: {markerColor(selectedDetection.type)}"
-						></span>
-						<span class="text-sm font-medium text-titan-text">{markerLabel(selectedDetection.type)}</span>
-					</div>
-					<div class="text-xs text-titan-text-muted mb-1">
-						{formatTime(selectedDetection.timestamp_ticks)} &middot; {(selectedDetection.confidence * 100).toFixed(0)}% confidence
-					</div>
-					<div class="flex gap-2 mt-2">
-						<button
-							onclick={handleAccept}
-							class="flex-1 text-xs px-2 py-1.5 bg-titan-accent text-white rounded hover:opacity-90"
-						>
-							Accept as Chapter
-						</button>
-						<button
-							onclick={() => { selectedDetection = null; }}
-							class="text-xs px-2 py-1.5 bg-titan-border rounded hover:bg-titan-surface-hover"
-						>
-							Dismiss
-						</button>
-					</div>
-				</div>
-			{/if}
 		</div>
 	{/if}
 </div>

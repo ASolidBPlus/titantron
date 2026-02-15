@@ -304,15 +304,7 @@
 		chapters = await getChapters(playerInfo.video.id);
 	}
 
-	async function handleAcceptChapter(ticks: number, title: string) {
-		if (!activeVideoId) return;
-		try {
-			await createChapter(activeVideoId, { title, start_ticks: ticks });
-			await reloadChapters();
-		} catch (e) {
-			console.error('Failed to create chapter:', e);
-		}
-	}
+
 
 	async function loadComments() {
 		if (commentsLoaded || commentsLoading) return;
@@ -456,7 +448,6 @@
 								durationTicks={playerInfo.video.duration_ticks}
 								currentTimeTicks={Math.floor(currentTime * 10_000_000)}
 								onSeekTo={(ticks) => { videoEl.currentTime = ticks / 10_000_000; }}
-								onAcceptChapter={handleAcceptChapter}
 								onDetectionsReady={(d) => { detections = d; }}
 							/>
 						</div>
