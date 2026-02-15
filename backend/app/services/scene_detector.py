@@ -199,7 +199,7 @@ async def detect_visual_transitions(
                 result = _analyze_pair(prev_thumb, thumb)
                 if result["is_detection"]:
                     detections.append({
-                        "timestamp_ticks": thumb_index * interval,
+                        "timestamp_ticks": thumb_index * interval * 10_000,
                         "confidence": result["confidence"],
                         "type": result["type"],
                     })

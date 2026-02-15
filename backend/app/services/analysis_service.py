@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import traceback
 from datetime import datetime
 
 from sqlalchemy import select
@@ -60,6 +61,7 @@ async def run_analysis(
         )
     except asyncio.TimeoutError:
         logger.error(f"Analysis timed out for video {video_id}")
+        traceback.print_exc()
         _analysis_progress[video_id].update({
             "status": "failed",
             "message": "Analysis timed out (10 minute limit)",
@@ -78,6 +80,7 @@ async def run_analysis(
             pass
     except Exception as e:
         logger.error(f"Analysis failed for video {video_id}: {e}")
+        traceback.print_exc()
         _analysis_progress[video_id].update({
             "status": "failed",
             "message": f"Analysis failed: {e}",

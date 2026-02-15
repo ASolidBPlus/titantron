@@ -28,7 +28,7 @@ router = APIRouter()
 async def start_analysis(
     video_id: int,
     background_tasks: BackgroundTasks,
-    phase: str = Query("both", regex="^(both|visual|audio)$"),
+    phase: str = Query("both", pattern="^(both|visual|audio)$"),
     db: AsyncSession = Depends(get_db),
     client: JellyfinClient = Depends(get_jellyfin_client),
 ):

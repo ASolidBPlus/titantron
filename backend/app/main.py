@@ -1,3 +1,5 @@
+import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,6 +12,13 @@ from app.config import load_runtime_settings, settings
 from app.database import init_db
 from app.dependencies import require_admin
 from app.routers import admin_auth, admin_settings, analysis, auth, browse, libraries, matching, player, search, sync, wrestlers
+
+# Configure logging so all loggers output to stderr (visible in container logs)
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(levelname)-5s [%(name)s] %(message)s",
+    stream=sys.stderr,
+)
 
 
 @asynccontextmanager
