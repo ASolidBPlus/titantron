@@ -254,9 +254,9 @@
 	});
 </script>
 
-<div class="bg-titan-surface border border-titan-border rounded-lg overflow-hidden">
-	<!-- Header -->
-	<div class="flex items-center gap-3 px-3 py-2 border-b border-titan-border">
+<div class="bg-titan-surface border border-titan-border rounded-lg">
+	<!-- Header (outside overflow-hidden so dropdowns aren't clipped) -->
+	<div class="relative flex items-center gap-3 px-3 py-2 border-b border-titan-border">
 		<span class="text-sm font-medium text-titan-text-muted">Match Detection</span>
 		<div class="flex-1"></div>
 
@@ -267,10 +267,10 @@
 					class="text-xs px-3 py-1.5 bg-titan-accent text-white rounded hover:opacity-90 transition-opacity flex items-center gap-1"
 				>
 					Detect Match Boundaries
-					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
 				</button>
 				{#if showAnalysisMenu}
-					<div class="absolute right-0 bottom-full mb-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+					<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
 						<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
 						<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
 						<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
@@ -327,10 +327,10 @@
 						title="Re-analyze"
 					>
 						Re-run
-						<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+						<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
 					</button>
 					{#if showAnalysisMenu}
-						<div class="absolute right-0 bottom-full mb-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+						<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
 							<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
 							<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
 							<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
@@ -351,10 +351,10 @@
 					class="text-xs px-2 py-1 bg-titan-border rounded hover:bg-titan-surface-hover flex items-center gap-0.5"
 				>
 					Retry
-					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
 				</button>
 				{#if showAnalysisMenu}
-					<div class="absolute right-0 bottom-full mb-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
+					<div class="absolute right-0 top-full mt-1 bg-titan-surface border border-titan-border rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
 						<button onclick={() => handleStartAnalysis('both')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">All</button>
 						<button onclick={() => handleStartAnalysis('visual')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Visual Only</button>
 						<button onclick={() => handleStartAnalysis('audio')} class="w-full text-left text-xs px-3 py-1.5 hover:bg-titan-surface-hover">Audio Only</button>
@@ -367,7 +367,7 @@
 	<!-- Filmstrip -->
 	{#if status.status === 'completed' && results}
 		<div
-			class="relative overflow-x-auto"
+			class="relative overflow-x-auto overflow-y-hidden rounded-b-lg"
 			bind:this={scrollContainer}
 			onscroll={handleScroll}
 		>
