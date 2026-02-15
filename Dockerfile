@@ -26,6 +26,12 @@ COPY --from=frontend-build /app/frontend/build ./frontend-build
 # Create config directory for SQLite
 RUN mkdir -p /config
 
+# Git info baked in at build time
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+ENV TITANTRON_GIT_COMMIT=$GIT_COMMIT
+ENV TITANTRON_GIT_BRANCH=$GIT_BRANCH
+
 ENV TITANTRON_DB_PATH=/config/titantron.db
 ENV TITANTRON_FRONTEND_DIR=/app/frontend-build
 ENV TITANTRON_LOG_LEVEL=info

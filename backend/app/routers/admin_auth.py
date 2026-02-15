@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -28,7 +30,14 @@ async def admin_status(request: Request):
             authenticated = validate_session(token)
     else:
         authenticated = True
-    return {"required": required, "authenticated": authenticated}
+    return {
+        "required": required,
+        "authenticated": authenticated,
+        "version": {
+            "commit": os.environ.get("TITANTRON_GIT_COMMIT", "dev"),
+            "branch": os.environ.get("TITANTRON_GIT_BRANCH", "local"),
+        },
+    }
 
 
 @router.post("/login")
