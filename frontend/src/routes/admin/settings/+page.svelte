@@ -16,11 +16,13 @@
 		browseDirs,
 		startBatchAnalysis,
 		getBatchAnalysisStatus,
+		testMLConnection,
 		type JellyfinLibrary,
 		type ConfiguredLibrary,
 		type SyncStatus,
 		type BrowseDirsResult,
 		type BatchAnalysisStatus,
+		type MLHealthStatus,
 	} from '$lib/api/client';
 
 	const API_BASE = '/api/v1';
@@ -133,9 +135,29 @@
 	let scrapeRateLimit = $state(0.5);
 	let scrapeBurst = $state(3);
 
+	// ML Audio
+	let mlAudioEnabled = $state(false);
+	let mlServiceUrl = $state('http://titantron-ml:8769');
+	let mlWindowSecs = $state(30);
+	let mlHealth = $state<MLHealthStatus | null>(null);
+	let mlTesting = $state(false);
+	let showMLAudio = $state(false);
+
 	// Settings save
 	let saving = $state(false);
 	let settingsMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	async function handleTestML() {
+		mlTesting = true;
+		mlHealth = null;
+		try {
+			mlHealth = await testMLConnection();
+		} catch {
+			mlHealth = { available: false, model_loaded: false };
+		} finally {
+			mlTesting = false;
+		}
+	}
 
 	// Section collapse state
 	let showJellyfin = $state(true);
@@ -197,6 +219,9 @@
 				scrapeBurst = settings.scrape_burst;
 				pathMapFrom = settings.path_map_from;
 				pathMapTo = settings.path_map_to;
+				mlAudioEnabled = !!settings.ml_audio_enabled;
+				mlServiceUrl = settings.ml_service_url || 'http://titantron-ml:8769';
+				mlWindowSecs = settings.ml_window_secs || 30;
 			}
 			if (connected) {
 				await loadLibraries();
@@ -325,6 +350,9 @@
 				scrape_burst: scrapeBurst,
 				path_map_from: pathMapFrom,
 				path_map_to: pathMapTo,
+				ml_audio_enabled: mlAudioEnabled,
+				ml_service_url: mlServiceUrl,
+				ml_window_secs: mlWindowSecs,
 			};
 			if (newPassword) {
 				updates.admin_password = newPassword;
@@ -706,6 +734,95 @@
 					</p>
 				{/if}
 			</div>
+		</section>
+
+		<!-- Section: ML Audio Detection -->
+		<section class="bg-titan-surface border border-titan-border rounded-lg overflow-hidden">
+			<button
+				onclick={() => showMLAudio = !showMLAudio}
+				class="w-full flex items-center justify-between p-4 hover:bg-titan-surface-hover transition-colors text-left"
+			>
+				<div class="flex items-center gap-3">
+					<h2 class="text-lg font-semibold">Audio Detection (ML)</h2>
+					{#if mlAudioEnabled}
+						<span class="text-xs px-2 py-0.5 rounded bg-green-800/50 text-green-300">Enabled</span>
+					{:else}
+						<span class="text-xs px-2 py-0.5 rounded bg-titan-border text-titan-text-muted">Disabled</span>
+					{/if}
+				</div>
+				<span class="text-titan-text-muted text-sm">{showMLAudio ? '−' : '+'}</span>
+			</button>
+			{#if showMLAudio}
+				<div class="px-4 pb-4 space-y-4 border-t border-titan-border pt-4">
+					<p class="text-xs text-titan-text-muted">
+						Uses a separate ML container (PANNs CNN14) to detect entrance music in videos. Add the <code>titantron-ml</code> container to your docker-compose to enable.
+					</p>
+
+					<!-- Toggle -->
+					<label class="flex items-center gap-3 cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={mlAudioEnabled}
+							class="w-4 h-4 rounded border-titan-border bg-titan-bg text-titan-accent focus:ring-titan-accent"
+						/>
+						<span class="text-sm">Enable ML audio detection</span>
+					</label>
+
+					<!-- Service URL -->
+					<div class="max-w-lg">
+						<label for="ml-service-url" class="block text-xs text-titan-text-muted mb-1">ML Service URL</label>
+						<div class="flex gap-2">
+							<input
+								id="ml-service-url"
+								type="text"
+								bind:value={mlServiceUrl}
+								placeholder="http://titantron-ml:8769"
+								class="flex-1 px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+							/>
+							<button
+								type="button"
+								onclick={handleTestML}
+								disabled={mlTesting || !mlServiceUrl}
+								class="px-3 py-2 bg-titan-border rounded hover:bg-titan-surface-hover text-xs shrink-0 disabled:opacity-50"
+							>
+								{mlTesting ? 'Testing...' : 'Test Connection'}
+							</button>
+						</div>
+					</div>
+
+					<!-- Connection status -->
+					{#if mlHealth}
+						<div class="flex items-center gap-2 text-sm">
+							{#if mlHealth.available}
+								<span class="w-2 h-2 rounded-full bg-green-400"></span>
+								<span class="text-green-400">
+									Connected ({mlHealth.device === 'cuda' ? 'GPU' : 'CPU'}){mlHealth.model_loaded ? '' : ' — model loads on first analysis'}
+								</span>
+							{:else}
+								<span class="w-2 h-2 rounded-full bg-red-400"></span>
+								<span class="text-red-400">ML service unreachable</span>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Window size -->
+					<div class="max-w-xs">
+						<label for="ml-window-secs" class="block text-xs text-titan-text-muted mb-1">Window size (seconds)</label>
+						<input
+							id="ml-window-secs"
+							type="number"
+							min="2"
+							max="60"
+							step="1"
+							bind:value={mlWindowSecs}
+							class="w-full px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+						/>
+						<p class="text-xs text-titan-text-muted mt-1">
+							Smaller = more precise timestamps but slower. GPU: 2-10s, CPU: 30s recommended.
+						</p>
+					</div>
+				</div>
+			{/if}
 		</section>
 
 		<!-- Section 3: Security -->

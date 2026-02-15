@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app.config import get_setting, save_runtime_settings
 from app.services.admin_session import invalidate_all_sessions
+from app.services.ml_client import check_ml_available
 
 router = APIRouter()
 
@@ -14,6 +15,9 @@ class SettingsUpdate(BaseModel):
     scrape_burst: int | None = None
     path_map_from: str | None = None
     path_map_to: str | None = None
+    ml_audio_enabled: bool | None = None
+    ml_service_url: str | None = None
+    ml_window_secs: int | None = None
 
 
 @router.get("/settings")
@@ -26,6 +30,9 @@ async def get_app_settings():
         "scrape_burst": get_setting("scrape_burst"),
         "path_map_from": get_setting("path_map_from"),
         "path_map_to": get_setting("path_map_to"),
+        "ml_audio_enabled": get_setting("ml_audio_enabled"),
+        "ml_service_url": get_setting("ml_service_url"),
+        "ml_window_secs": get_setting("ml_window_secs"),
     }
 
 
@@ -48,6 +55,12 @@ async def update_app_settings(body: SettingsUpdate):
         updates["path_map_from"] = body.path_map_from
     if body.path_map_to is not None:
         updates["path_map_to"] = body.path_map_to
+    if body.ml_audio_enabled is not None:
+        updates["ml_audio_enabled"] = body.ml_audio_enabled
+    if body.ml_service_url is not None:
+        updates["ml_service_url"] = body.ml_service_url
+    if body.ml_window_secs is not None:
+        updates["ml_window_secs"] = max(2, min(body.ml_window_secs, 60))
 
     if updates:
         save_runtime_settings(updates)
@@ -56,3 +69,10 @@ async def update_app_settings(body: SettingsUpdate):
         invalidate_all_sessions()
 
     return {"success": True, "updated": list(updates.keys())}
+
+
+@router.get("/ml/health")
+async def test_ml_connection():
+    """Test connection to the ML sidecar container."""
+    result = await check_ml_available()
+    return result

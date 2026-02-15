@@ -331,6 +331,9 @@ export interface AppSettings {
 	scrape_burst: number;
 	path_map_from: string;
 	path_map_to: string;
+	ml_audio_enabled: boolean;
+	ml_service_url: string;
+	ml_window_secs: number;
 }
 
 export interface AppSettingsUpdate {
@@ -340,6 +343,9 @@ export interface AppSettingsUpdate {
 	scrape_burst?: number;
 	path_map_from?: string;
 	path_map_to?: string;
+	ml_audio_enabled?: boolean;
+	ml_service_url?: string;
+	ml_window_secs?: number;
 }
 
 export function getAppSettings(): Promise<AppSettings> {
@@ -351,6 +357,16 @@ export function updateAppSettings(data: AppSettingsUpdate): Promise<{ success: b
 		method: 'PUT',
 		body: JSON.stringify(data)
 	});
+}
+
+export interface MLHealthStatus {
+	available: boolean;
+	model_loaded: boolean;
+	device?: string;
+}
+
+export function testMLConnection(): Promise<MLHealthStatus> {
+	return request('/admin/ml/health');
 }
 
 // Analysis

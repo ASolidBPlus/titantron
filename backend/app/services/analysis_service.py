@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models.analysis_result import AnalysisResult
 from app.models.video_item import VideoItem
-from app.services.audio_detector import detect_audio_events
 from app.services.jellyfin_client import JellyfinClient
+from app.services.ml_client import check_ml_available, classify_audio
 from app.services.scene_detector import detect_visual_transitions, detect_visual_transitions_trickplay
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ async def _run_analysis_pipeline(
             # Save visual results
             analysis.visual_detections = json.dumps(visual_detections)
 
-        # --- Audio detection ---
+        # --- Audio detection (ML-powered, opt-in) ---
         if phase in ("both", "audio"):
             analysis.status = "running_audio"
             analysis.progress = 0
@@ -233,37 +233,47 @@ async def _run_analysis_pipeline(
             audio_detections: list[dict] = []
             audio_skip_reason: str | None = None
 
-            if local_path:
-                try:
-                    def on_audio_progress(current: int, total: int):
-                        _analysis_progress[video_id].update({
-                            "progress": current,
-                            "total_steps": total,
-                            "message": f"Analyzing audio ({current}/{total}s)...",
-                        })
+            ml_enabled = get_setting("ml_audio_enabled")
 
-                    audio_detections = await detect_audio_events(
-                        local_path,
-                        video.duration_ticks or 0,
-                        on_progress=on_audio_progress,
-                    )
-                except Exception as e:
-                    logger.error(f"Audio detection failed: {e}")
-                    audio_skip_reason = f"error:{e}"
-                    _analysis_progress[video_id]["message"] = f"Audio detection failed: {e}"
+            if not ml_enabled:
+                audio_skip_reason = "ml_audio_disabled"
+                logger.info(f"ML audio disabled, skipping audio for video {video_id}")
+                _analysis_progress[video_id]["message"] = (
+                    "Audio analysis skipped (ML audio not enabled)"
+                )
+            elif not local_path:
+                audio_skip_reason = "no_path_mapping"
+                logger.info(f"No local path mapping for video {video_id}, skipping audio")
+                _analysis_progress[video_id]["message"] = (
+                    "Audio analysis skipped (no path mapping configured)"
+                )
             else:
-                if not local_path:
-                    audio_skip_reason = "no_path_mapping"
-                    logger.info(f"No local path mapping for video {video_id}, skipping audio")
+                # Check ML service availability
+                ml_status = await check_ml_available()
+                if not ml_status["available"]:
+                    audio_skip_reason = "ml_service_unavailable"
+                    logger.warning(f"ML service unavailable, skipping audio for video {video_id}")
                     _analysis_progress[video_id]["message"] = (
-                        "Audio analysis skipped (no path mapping configured)"
+                        "Audio analysis skipped (ML service unavailable)"
                     )
                 else:
-                    audio_skip_reason = f"file_not_found:{local_path}"
-                    logger.warning(f"Local file not found: {local_path}")
-                    _analysis_progress[video_id]["message"] = (
-                        f"Audio analysis skipped (file not found: {local_path})"
-                    )
+                    try:
+                        def on_audio_progress(current: int, total: int):
+                            _analysis_progress[video_id].update({
+                                "progress": current,
+                                "total_steps": total,
+                                "message": f"Analyzing audio ({current}/{total}s)...",
+                            })
+
+                        audio_detections = await classify_audio(
+                            local_path,
+                            video.duration_ticks or 0,
+                            on_progress=on_audio_progress,
+                        )
+                    except Exception as e:
+                        logger.error(f"ML audio detection failed: {e}")
+                        audio_skip_reason = f"error:{e}"
+                        _analysis_progress[video_id]["message"] = f"Audio detection failed: {e}"
 
             analysis.audio_detections = json.dumps(audio_detections)
             analysis.audio_skip_reason = audio_skip_reason

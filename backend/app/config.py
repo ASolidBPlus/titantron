@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     path_map_from: str = ""
     path_map_to: str = ""
 
+    # ML audio detection (opt-in, requires titantron-ml sidecar)
+    ml_audio_enabled: bool = False
+    ml_service_url: str = ""
+    ml_window_secs: int = 30  # analysis window size (2-60, lower = more precise but slower)
+
     # Cagematch scraping
     scrape_rate_limit: float = 0.5  # requests per second
     scrape_burst: int = 3
@@ -53,7 +58,7 @@ settings = Settings()
 _runtime_overrides: dict = {}
 
 # Keys that can be changed via the admin settings UI
-CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst", "path_map_from", "path_map_to"}
+CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst", "path_map_from", "path_map_to", "ml_audio_enabled", "ml_service_url", "ml_window_secs"}
 
 
 def _settings_path() -> Path:

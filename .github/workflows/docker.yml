@@ -38,3 +38,45 @@ jobs:
           tags: |
             ghcr.io/asolidbplus/titantron:${{ steps.tag.outputs.tag }}
             ghcr.io/asolidbplus/titantron:${{ github.sha }}
+
+  build-ml:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        name: Build ML (CPU)
+        with:
+          context: ./ml
+          push: true
+          tags: |
+            ghcr.io/asolidbplus/titantron-ml:${{ steps.tag.outputs.tag }}
+            ghcr.io/asolidbplus/titantron-ml:${{ github.sha }}
+
+      - uses: docker/build-push-action@v6
+        name: Build ML (CUDA)
+        with:
+          context: ./ml
+          file: ./ml/Dockerfile.cuda
+          push: true
+          tags: |
+            ghcr.io/asolidbplus/titantron-ml:cuda-${{ steps.tag.outputs.tag }}
+            ghcr.io/asolidbplus/titantron-ml:cuda-${{ github.sha }}
