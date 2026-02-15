@@ -24,42 +24,43 @@
 	let status = $state<AnalysisStatus>({ status: 'none' });
 	let results = $state<AnalysisResults | null>(null);
 	let zoomLevel = $state(1);
-	let scrollContainer = $state<HTMLDivElement>(null!);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let showAnalysisMenu = $state(false);
-	let showFilmstrip = $state(false);
 
-	// Waveform container width tracking
-	let waveformContainer = $state<HTMLDivElement>(null!);
-	let containerWidth = $state(700);
+	// Waveform container tracking
+	let waveformOuter = $state<HTMLDivElement>(null!);
+	let outerWidth = $state(700);
 	let resizeObserver: ResizeObserver | null = null;
 
-	// Waveform tooltip state
-	let waveformTooltip = $state<{ x: number; time: string; music: number } | null>(null);
+	// Hover thumbnail state
+	let hoverInfo = $state<{
+		x: number;       // position in viewport relative to outer container
+		time: string;
+		music: number;
+		thumbStyle: { url: string; bgPosition: string; bgSize: string } | null;
+	} | null>(null);
 
-	const WAVEFORM_HEIGHT = 80;
+	const WAVEFORM_HEIGHT = 160;
 
-	// Thumbnail dimensions
+	// Thumbnail dimensions for hover preview
 	const thumbPixelW = trickplay.width;
 	const thumbPixelH = trickplay.height;
 	const sheetPixelW = trickplay.width * trickplay.tile_width;
 	const sheetPixelH = trickplay.height * trickplay.tile_height;
 	const tilesPerSheet = trickplay.tile_width * trickplay.tile_height;
 
-	// Display dimensions (scale down thumbnails)
-	const displayH = 60;
-	const scale = displayH / thumbPixelH;
-	const displayW = Math.round(thumbPixelW * scale);
+	// Hover thumbnail display size
+	const hoverThumbH = 90;
+	const hoverScale = hoverThumbH / thumbPixelH;
+	const hoverThumbW = Math.round(thumbPixelW * hoverScale);
 
-	// Filmstrip dimensions (only used when filmstrip is expanded)
-	let filmstripWidth = $derived(trickplay.thumbnail_count * displayW * zoomLevel);
+	// Waveform inner width (zoomed)
+	let waveformWidth = $derived(outerWidth * zoomLevel);
 
-	// Visual detections only (scene_change, dark_frame, graphics_change) — shown as subtle markers on filmstrip
-	let visualDetections = $derived<Detection[]>(
-		results?.visual ?? []
-	);
+	// Visual detections
+	let visualDetections = $derived<Detection[]>(results?.visual ?? []);
 
-	// Bell detections — shown as amber lines on waveform
+	// Bell detections
 	let bellDetections = $derived<Detection[]>(
 		results?.audio.filter(d => d.type === 'bell') ?? []
 	);
@@ -78,15 +79,31 @@
 	// Duration in seconds
 	let durationSecs = $derived(durationTicks / 10_000_000);
 
-	// Downsampled spectrum for SVG rendering
-	let downsampled = $derived(downsampleSpectrum(spectrum, containerWidth * 2, durationSecs));
+	// Downsampled spectrum — target 2px per point at current zoom
+	let downsampled = $derived(downsampleSpectrum(spectrum, waveformWidth * 2, durationSecs));
 
 	// SVG paths
-	let areaPath = $derived(buildAreaPath(downsampled, containerWidth, WAVEFORM_HEIGHT));
-	let linePath = $derived(buildLinePath(downsampled, containerWidth, WAVEFORM_HEIGHT));
+	let areaPath = $derived(buildAreaPath(downsampled, waveformWidth, WAVEFORM_HEIGHT));
+	let linePath = $derived(buildLinePath(downsampled, waveformWidth, WAVEFORM_HEIGHT));
 
-	// Playhead x position on waveform
-	let playheadX = $derived((currentTimeTicks / durationTicks) * containerWidth);
+	// Playhead x position
+	let playheadX = $derived((currentTimeTicks / durationTicks) * waveformWidth);
+
+	// Current music confidence at playhead position
+	let currentMusic = $derived.by(() => {
+		if (spectrum.length === 0) return null;
+		const currentSecs = currentTimeTicks / 10_000_000;
+		let closest = spectrum[0];
+		let minDist = Math.abs(currentSecs - closest.t);
+		for (const pt of spectrum) {
+			const dist = Math.abs(currentSecs - pt.t);
+			if (dist < minDist) {
+				minDist = dist;
+				closest = pt;
+			}
+		}
+		return closest.music;
+	});
 
 	// Notify parent when detections change
 	$effect(() => {
@@ -123,7 +140,6 @@
 				}
 				si++;
 			}
-			// Peek back so the next bucket can re-check boundary points
 			if (si > 0 && spec[si - 1].t >= bucketEnd) si--;
 
 			out.push({ x: (bucketStart + bucketDur / 2) / durSecs, value: maxVal });
@@ -137,7 +153,7 @@
 		height: number,
 	): string {
 		if (points.length === 0) return '';
-		const margin = 2; // small top margin
+		const margin = 2;
 		const usable = height - margin;
 
 		let d = `M 0 ${height}`;
@@ -180,9 +196,17 @@
 
 		return {
 			url: `${trickplay.base_url}${sheetIndex}.jpg`,
-			bgPosition: `-${col * thumbPixelW * scale}px -${row * thumbPixelH * scale}px`,
-			bgSize: `${sheetPixelW * scale}px ${sheetPixelH * scale}px`,
+			bgPosition: `-${col * thumbPixelW * hoverScale}px -${row * thumbPixelH * hoverScale}px`,
+			bgSize: `${sheetPixelW * hoverScale}px ${sheetPixelH * hoverScale}px`,
 		};
+	}
+
+	function getThumbIndexForTime(timeSecs: number): number {
+		const intervalSecs = trickplay.interval / 1000;
+		return Math.min(
+			Math.max(0, Math.floor(timeSecs / intervalSecs)),
+			trickplay.thumbnail_count - 1,
+		);
 	}
 
 	// Combine skip reason from status (polling) and results (persisted)
@@ -201,24 +225,6 @@
 		return `Audio skipped: ${reason}`;
 	}
 
-	function markerColor(type: string): string {
-		switch (type) {
-			case 'scene_change': return '#3b82f6';
-			case 'dark_frame': return '#6b7280';
-			case 'graphics_change': return '#a855f7';
-			default: return '#8888a0';
-		}
-	}
-
-	function formatTime(ticks: number): string {
-		const totalSeconds = Math.floor(ticks / 10_000_000);
-		const h = Math.floor(totalSeconds / 3600);
-		const m = Math.floor((totalSeconds % 3600) / 60);
-		const s = totalSeconds % 60;
-		if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-		return `${m}:${String(s).padStart(2, '0')}`;
-	}
-
 	function formatTimeSecs(secs: number): string {
 		const h = Math.floor(secs / 3600);
 		const m = Math.floor((secs % 3600) / 60);
@@ -232,8 +238,9 @@
 	function handleWaveformClick(e: MouseEvent) {
 		const target = e.currentTarget as HTMLElement;
 		const rect = target.getBoundingClientRect();
-		const clickX = e.clientX - rect.left;
-		const fraction = clickX / containerWidth;
+		const scrollLeft = waveformOuter?.scrollLeft ?? 0;
+		const clickX = e.clientX - rect.left + scrollLeft;
+		const fraction = clickX / waveformWidth;
 		const ticks = Math.floor(fraction * durationTicks);
 		onSeekTo(Math.max(0, Math.min(ticks, durationTicks)));
 	}
@@ -242,8 +249,9 @@
 		if (spectrum.length === 0) return;
 		const target = e.currentTarget as HTMLElement;
 		const rect = target.getBoundingClientRect();
-		const hoverX = e.clientX - rect.left;
-		const fraction = hoverX / containerWidth;
+		const scrollLeft = waveformOuter?.scrollLeft ?? 0;
+		const hoverX = e.clientX - rect.left + scrollLeft;
+		const fraction = hoverX / waveformWidth;
 		const timeSecs = fraction * durationSecs;
 
 		// Find closest spectrum window
@@ -257,15 +265,20 @@
 			}
 		}
 
-		waveformTooltip = {
-			x: hoverX,
+		// Get trickplay thumbnail for this time
+		const thumbIdx = getThumbIndexForTime(timeSecs);
+		const thumbStyle = getThumbnailStyle(thumbIdx);
+
+		hoverInfo = {
+			x: e.clientX - (waveformOuter?.getBoundingClientRect().left ?? 0),
 			time: formatTimeSecs(timeSecs),
 			music: closest.music,
+			thumbStyle: thumbStyle,
 		};
 	}
 
 	function handleWaveformLeave() {
-		waveformTooltip = null;
+		hoverInfo = null;
 	}
 
 	// --- Analysis controls ---
@@ -312,10 +325,9 @@
 	}
 
 	onMount(async () => {
-		// Set up ResizeObserver for waveform container
 		resizeObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
-				containerWidth = entry.contentRect.width;
+				outerWidth = entry.contentRect.width;
 			}
 		});
 
@@ -331,13 +343,12 @@
 		}
 	});
 
-	// Observe the waveform container when it's available
+	// Observe outer container for resize
 	$effect(() => {
-		if (waveformContainer && resizeObserver) {
-			resizeObserver.observe(waveformContainer);
-			// Initialize width
-			containerWidth = waveformContainer.clientWidth || 700;
-			return () => resizeObserver?.unobserve(waveformContainer);
+		if (waveformOuter && resizeObserver) {
+			resizeObserver.observe(waveformOuter);
+			outerWidth = waveformOuter.clientWidth || 700;
+			return () => resizeObserver?.unobserve(waveformOuter);
 		}
 	});
 
@@ -361,24 +372,6 @@
 			document.addEventListener('click', handleClickOutside, true);
 			return () => document.removeEventListener('click', handleClickOutside, true);
 		}
-	});
-
-	// Visible thumbnail range for performance (only render what's in view)
-	let visibleStart = $state(0);
-	let visibleEnd = $state(100);
-
-	function handleScroll() {
-		if (!scrollContainer) return;
-		const scrollLeft = scrollContainer.scrollLeft;
-		const cw = scrollContainer.clientWidth;
-		const thumbW = displayW * zoomLevel;
-		visibleStart = Math.max(0, Math.floor(scrollLeft / thumbW) - 2);
-		visibleEnd = Math.min(trickplay.thumbnail_count, Math.ceil((scrollLeft + cw) / thumbW) + 2);
-	}
-
-	$effect(() => {
-		zoomLevel;
-		handleScroll();
 	});
 </script>
 
@@ -429,6 +422,21 @@
 						<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: #f59e0b"></span>Bell</span>
 					{/if}
 				</div>
+				<!-- Zoom controls -->
+				<span class="text-xs text-titan-text-muted">|</span>
+				<div class="flex items-center gap-1">
+					<button
+						onclick={() => { zoomLevel = Math.max(1, zoomLevel / 2); }}
+						disabled={zoomLevel <= 1}
+						class="text-xs px-1.5 py-0.5 bg-titan-border rounded hover:bg-titan-surface-hover disabled:opacity-30"
+					>-</button>
+					<span class="text-xs text-titan-text-muted w-8 text-center">{zoomLevel}x</span>
+					<button
+						onclick={() => { zoomLevel = Math.min(16, zoomLevel * 2); }}
+						disabled={zoomLevel >= 16}
+						class="text-xs px-1.5 py-0.5 bg-titan-border rounded hover:bg-titan-surface-hover disabled:opacity-30"
+					>+</button>
+				</div>
 				<button
 					onclick={handleClear}
 					class="text-xs px-2 py-1 text-titan-text-muted hover:text-red-400 transition-colors"
@@ -473,25 +481,24 @@
 		{/if}
 	</div>
 
-	<!-- Waveform + Filmstrip -->
+	<!-- Waveform -->
 	{#if status.status === 'completed' && results}
-		<!-- SVG Waveform (full width, no scroll) -->
 		{#if spectrum.length > 0}
 			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
-				class="relative cursor-crosshair px-0"
-				bind:this={waveformContainer}
+				class="relative overflow-x-auto overflow-y-hidden cursor-crosshair"
+				bind:this={waveformOuter}
 				onclick={handleWaveformClick}
 				onmousemove={handleWaveformHover}
 				onmouseleave={handleWaveformLeave}
 			>
 				<svg
-					width={containerWidth}
+					width={waveformWidth}
 					height={WAVEFORM_HEIGHT}
-					viewBox="0 0 {containerWidth} {WAVEFORM_HEIGHT}"
+					viewBox="0 0 {waveformWidth} {WAVEFORM_HEIGHT}"
 					preserveAspectRatio="none"
-					class="block w-full"
+					class="block"
 				>
 					<defs>
 						<linearGradient id="waveformGrad" x1="0" y1="0" x2="0" y2="1">
@@ -503,13 +510,12 @@
 					<!-- Filled area -->
 					{#if areaPath}
 						<path d={areaPath} fill="url(#waveformGrad)" />
-						<!-- Stroke along top edge -->
 						<path d={linePath} fill="none" stroke="#22c55e" stroke-width="1.5" stroke-opacity="0.7" />
 					{/if}
 
 					<!-- Bell markers (amber vertical lines) -->
 					{#each bellDetections as bell}
-						{@const bx = (bell.timestamp_ticks / durationTicks) * containerWidth}
+						{@const bx = (bell.timestamp_ticks / durationTicks) * waveformWidth}
 						<line
 							x1={bx} y1="0" x2={bx} y2={WAVEFORM_HEIGHT}
 							stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.8"
@@ -523,128 +529,58 @@
 					/>
 				</svg>
 
-				<!-- Tooltip -->
-				{#if waveformTooltip}
+				<!-- Hover tooltip with thumbnail preview -->
+				{#if hoverInfo}
 					<div
-						class="absolute z-30 bg-titan-bg border border-titan-border rounded px-2 py-1 -translate-x-1/2 pointer-events-none text-[10px] whitespace-nowrap"
-						style="left: {waveformTooltip.x}px; top: -28px"
+						class="absolute z-30 pointer-events-none flex flex-col items-center gap-1"
+						style="left: {hoverInfo.x}px; top: 0; transform: translateX(-50%)"
 					>
-						<span class="text-titan-text">{waveformTooltip.time}</span>
-						<span class="text-titan-text-muted mx-1">&middot;</span>
-						<span style="color: rgba(34, 197, 94, {0.5 + waveformTooltip.music * 0.5})">{(waveformTooltip.music * 100).toFixed(0)}% music</span>
+						<!-- Thumbnail -->
+						{#if hoverInfo.thumbStyle}
+							<div
+								class="rounded border border-titan-border shadow-lg"
+								style="width: {hoverThumbW}px; height: {hoverThumbH}px;
+									background-image: url('{hoverInfo.thumbStyle.url}');
+									background-position: {hoverInfo.thumbStyle.bgPosition};
+									background-size: {hoverInfo.thumbStyle.bgSize};
+									background-repeat: no-repeat;"
+							></div>
+						{/if}
+						<!-- Info -->
+						<div class="bg-titan-bg/95 border border-titan-border rounded px-2 py-0.5 text-[10px] whitespace-nowrap">
+							<span class="text-titan-text">{hoverInfo.time}</span>
+							<span class="text-titan-text-muted mx-1">&middot;</span>
+							<span style="color: rgba(34, 197, 94, {0.5 + hoverInfo.music * 0.5})">{(hoverInfo.music * 100).toFixed(0)}% music</span>
+						</div>
 					</div>
 				{/if}
 			</div>
 		{:else}
-			<!-- No spectrum data — fallback -->
-			<div bind:this={waveformContainer} class="flex items-center justify-center h-12 text-xs text-titan-text-muted">
+			<div bind:this={waveformOuter} class="flex items-center justify-center h-12 text-xs text-titan-text-muted">
 				No audio spectrum data available
 			</div>
 		{/if}
 
 		<!-- Info bar -->
 		<div class="flex items-center gap-2 px-3 py-1.5 text-[10px] text-titan-text-muted border-t border-titan-border">
-			<div class="flex-1">
-				{#if spectrum.length > 0}
-					{spectrum.length} windows ({windowSecs}s)
-				{/if}
-				{#if bellDetections.length > 0}
-					&middot; {bellDetections.length} bells
-				{/if}
-				{#if visualDetections.length > 0}
-					&middot; {visualDetections.length} visual
-				{/if}
-				{#if audioSkipReason}
-					<span class="ml-2 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
-						{audioSkipMessage(audioSkipReason)}
-					</span>
-				{/if}
-			</div>
-			<button
-				onclick={() => { showFilmstrip = !showFilmstrip; }}
-				class="text-[10px] px-2 py-0.5 rounded border border-titan-border hover:bg-titan-surface-hover transition-colors flex items-center gap-1"
-			>
-				{showFilmstrip ? 'Hide' : 'Show'} Thumbnails
-				<svg
-					class="w-3 h-3 transition-transform"
-					class:rotate-180={showFilmstrip}
-					fill="none" stroke="currentColor" viewBox="0 0 24 24"
-				>
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-				</svg>
-			</button>
+			{#if currentMusic !== null}
+				<span style="color: rgba(34, 197, 94, {0.5 + currentMusic * 0.5})">{(currentMusic * 100).toFixed(0)}% music</span>
+				<span>&middot;</span>
+			{/if}
+			{#if spectrum.length > 0}
+				{spectrum.length} windows ({windowSecs}s)
+			{/if}
+			{#if bellDetections.length > 0}
+				&middot; {bellDetections.length} bells
+			{/if}
+			{#if visualDetections.length > 0}
+				&middot; {visualDetections.length} visual
+			{/if}
+			{#if audioSkipReason}
+				<span class="ml-2 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
+					{audioSkipMessage(audioSkipReason)}
+				</span>
+			{/if}
 		</div>
-
-		<!-- Collapsible filmstrip -->
-		{#if showFilmstrip}
-			<div class="border-t border-titan-border">
-				<!-- Zoom controls -->
-				<div class="flex items-center gap-1 px-3 py-1">
-					<span class="text-[10px] text-titan-text-muted mr-1">Zoom</span>
-					<button
-						onclick={() => { zoomLevel = Math.max(1, zoomLevel / 2); }}
-						disabled={zoomLevel <= 1}
-						class="text-xs px-1.5 py-0.5 bg-titan-border rounded hover:bg-titan-surface-hover disabled:opacity-30"
-					>-</button>
-					<span class="text-xs text-titan-text-muted w-8 text-center">{zoomLevel}x</span>
-					<button
-						onclick={() => { zoomLevel = Math.min(8, zoomLevel * 2); }}
-						disabled={zoomLevel >= 8}
-						class="text-xs px-1.5 py-0.5 bg-titan-border rounded hover:bg-titan-surface-hover disabled:opacity-30"
-					>+</button>
-				</div>
-
-				<!-- Scrollable filmstrip -->
-				<div
-					class="relative overflow-x-auto overflow-y-hidden"
-					bind:this={scrollContainer}
-					onscroll={handleScroll}
-				>
-					<div class="relative" style="width: {filmstripWidth}px; height: {displayH}px">
-						<!-- Thumbnail strip -->
-						<div class="flex" style="height: {displayH}px">
-							{#each Array(trickplay.thumbnail_count) as _, i}
-								{#if i >= visibleStart && i < visibleEnd}
-									{@const style = getThumbnailStyle(i)}
-									<div
-										class="shrink-0 cursor-pointer hover:brightness-125 transition-[filter]"
-										style="width: {displayW * zoomLevel}px; height: {displayH}px;
-											background-image: url('{style.url}');
-											background-position: {style.bgPosition};
-											background-size: {style.bgSize};
-											background-repeat: no-repeat;"
-										onclick={() => onSeekTo(i * trickplay.interval * 10_000)}
-										role="button"
-										tabindex="-1"
-									></div>
-								{:else}
-									<div
-										class="shrink-0"
-										style="width: {displayW * zoomLevel}px; height: {displayH}px;"
-									></div>
-								{/if}
-							{/each}
-						</div>
-
-						<!-- Visual detection markers (subtle, on filmstrip) -->
-						{#each visualDetections as detection}
-							{@const leftPx = (detection.timestamp_ticks / durationTicks) * filmstripWidth}
-							<div
-								class="absolute top-0 w-0.5 pointer-events-none"
-								style="left: {leftPx}px; height: {displayH}px;
-									background-color: {markerColor(detection.type)};
-									opacity: {0.2 + detection.confidence * 0.3};"
-							></div>
-						{/each}
-
-						<!-- Current playback position on filmstrip -->
-						<div
-							class="absolute top-0 w-0.5 bg-titan-accent z-20 pointer-events-none"
-							style="left: {(currentTimeTicks / durationTicks) * filmstripWidth}px; height: {displayH}px"
-						></div>
-					</div>
-				</div>
-			</div>
-		{/if}
 	{/if}
 </div>
