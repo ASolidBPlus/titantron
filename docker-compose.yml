@@ -18,28 +18,22 @@ services:
     restart: unless-stopped
 
   # ── ML-powered music detection (optional) ──
-  # Uncomment ONE of the variants below, then set ML Service URL
-  # in Admin > Settings to http://titantron-ml:8769
-
-  # CPU variant (~1.5GB image, ~2-4 min per 2hr video)
+  # Uncomment to enable, then set ML Service URL in Admin > Settings
+  # to http://titantron-ml:8769
+  # First start installs dependencies (~2 min), cached in volume for subsequent starts.
+  # Auto-detects CUDA — add deploy.resources for GPU support.
   # titantron-ml:
   #   image: ghcr.io/asolidbplus/titantron-ml:latest
   #   volumes:
-  #     - ml-models:/root/.cache
+  #     - ml-cache:/cache  # persists installed deps + downloaded model
   #   restart: unless-stopped
-
-  # CUDA variant (~6GB image, seconds per video — requires NVIDIA GPU)
-  # titantron-ml:
-  #   image: ghcr.io/asolidbplus/titantron-ml:cuda-latest
-  #   volumes:
-  #     - ml-models:/root/.cache
-  #   restart: unless-stopped
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - capabilities: [gpu]
+  #   # Uncomment for GPU support (requires nvidia-container-toolkit):
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - capabilities: [gpu]
 
 volumes:
   titantron-config:
-  # ml-models:  # uncomment with titantron-ml
+  # ml-cache:  # uncomment with titantron-ml

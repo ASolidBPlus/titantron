@@ -63,20 +63,9 @@ jobs:
           fi
 
       - uses: docker/build-push-action@v6
-        name: Build ML (CPU)
         with:
           context: ./ml
           push: true
           tags: |
             ghcr.io/asolidbplus/titantron-ml:${{ steps.tag.outputs.tag }}
             ghcr.io/asolidbplus/titantron-ml:${{ github.sha }}
-
-      - uses: docker/build-push-action@v6
-        name: Build ML (CUDA)
-        with:
-          context: ./ml
-          file: ./ml/Dockerfile.cuda
-          push: true
-          tags: |
-            ghcr.io/asolidbplus/titantron-ml:cuda-${{ steps.tag.outputs.tag }}
-            ghcr.io/asolidbplus/titantron-ml:cuda-${{ github.sha }}
