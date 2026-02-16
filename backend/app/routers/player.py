@@ -3,12 +3,13 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_setting
 from app.database import get_db
+from app.models.bell_sample import BellSample
 from app.models.chapter import Chapter
 from app.models.event import Event
 from app.models.match import Match, MatchParticipant
@@ -38,6 +39,27 @@ class PlaybackReport(BaseModel):
     position_ticks: int
     is_paused: bool = False
     play_session_id: str
+
+
+class BellSampleCreate(BaseModel):
+    start_ticks: int
+    end_ticks: int
+    label: str | None = None
+
+
+class BellSampleUpdate(BaseModel):
+    label: str | None = None
+
+
+# --- Bell sample count (registered before {video_id} routes) ---
+
+
+@router.get("/bell-samples/count")
+async def get_bell_sample_count(db: AsyncSession = Depends(get_db)):
+    """Total bell sample count across all videos."""
+    result = await db.execute(select(func.count(BellSample.id)))
+    total = result.scalar() or 0
+    return {"total": total}
 
 
 # --- Helper ---
@@ -427,3 +449,92 @@ async def get_trickplay_tile(
         f"/Videos/{video.jellyfin_item_id}/Trickplay/{resolution}/{filename}"
     )
     return Response(content=data, media_type="image/jpeg")
+
+
+# --- Bell sample CRUD endpoints ---
+
+
+@router.get("/{video_id}/bell-samples")
+async def list_bell_samples(
+    video_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """List bell samples for a video."""
+    result = await db.execute(
+        select(BellSample).where(BellSample.video_item_id == video_id).order_by(BellSample.start_ticks)
+    )
+    samples = result.scalars().all()
+    return [
+        {
+            "id": s.id,
+            "video_item_id": s.video_item_id,
+            "start_ticks": s.start_ticks,
+            "end_ticks": s.end_ticks,
+            "label": s.label,
+        }
+        for s in samples
+    ]
+
+
+@router.post("/{video_id}/bell-samples")
+async def create_bell_sample(
+    video_id: int,
+    body: BellSampleCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a bell sample for a video."""
+    if body.end_ticks <= body.start_ticks:
+        raise HTTPException(status_code=400, detail="end_ticks must be greater than start_ticks")
+    sample = BellSample(
+        video_item_id=video_id,
+        start_ticks=body.start_ticks,
+        end_ticks=body.end_ticks,
+        label=body.label,
+    )
+    db.add(sample)
+    await db.commit()
+    await db.refresh(sample)
+    return {
+        "id": sample.id,
+        "video_item_id": sample.video_item_id,
+        "start_ticks": sample.start_ticks,
+        "end_ticks": sample.end_ticks,
+        "label": sample.label,
+    }
+
+
+@router.patch("/{video_id}/bell-samples/{sample_id}")
+async def update_bell_sample(
+    video_id: int,
+    sample_id: int,
+    body: BellSampleUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a bell sample's label."""
+    sample = await db.get(BellSample, sample_id)
+    if not sample or sample.video_item_id != video_id:
+        raise HTTPException(status_code=404, detail="Bell sample not found")
+    sample.label = body.label
+    await db.commit()
+    return {
+        "id": sample.id,
+        "video_item_id": sample.video_item_id,
+        "start_ticks": sample.start_ticks,
+        "end_ticks": sample.end_ticks,
+        "label": sample.label,
+    }
+
+
+@router.delete("/{video_id}/bell-samples/{sample_id}")
+async def delete_bell_sample(
+    video_id: int,
+    sample_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a bell sample."""
+    sample = await db.get(BellSample, sample_id)
+    if not sample or sample.video_item_id != video_id:
+        raise HTTPException(status_code=404, detail="Bell sample not found")
+    await db.delete(sample)
+    await db.commit()
+    return {"success": True}

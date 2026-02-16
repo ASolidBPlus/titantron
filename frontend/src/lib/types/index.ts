@@ -225,6 +225,14 @@ export interface Chapter {
 	end_ticks: number | null;
 }
 
+export interface BellSample {
+	id: number;
+	video_item_id: number;
+	start_ticks: number;
+	end_ticks: number;
+	label: string | null;
+}
+
 export interface PlayerInfo {
 	video: {
 		id: number;

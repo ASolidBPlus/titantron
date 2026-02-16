@@ -42,6 +42,7 @@ def _run_alembic_upgrade():
 async def init_db():
     from app.models import (  # noqa: F401
         analysis_result,
+        bell_sample,
         chapter,
         event,
         library,

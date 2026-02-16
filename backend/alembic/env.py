@@ -7,6 +7,7 @@ from alembic import context
 from app.database import Base
 from app.models import (  # noqa: F401
     analysis_result,
+    bell_sample,
     chapter,
     event,
     library,

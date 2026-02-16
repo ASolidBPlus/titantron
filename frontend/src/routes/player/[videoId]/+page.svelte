@@ -7,11 +7,16 @@
 		getChapters,
 		createChapter,
 		deleteChapter,
+		getBellSamples,
+		createBellSample,
+		updateBellSample,
+		deleteBellSample,
+		getBellSampleCount,
 		reportPlaybackStart,
 		reportPlaybackProgress,
 		reportPlaybackStopped,
 	} from '$lib/api/client';
-	import type { PlayerInfo, Chapter, WrestlingMatch } from '$lib/types';
+	import type { PlayerInfo, Chapter, BellSample, WrestlingMatch } from '$lib/types';
 	import PlayerControls from '$lib/components/player/PlayerControls.svelte';
 	import DetectionFilmstrip from '$lib/components/player/DetectionFilmstrip.svelte';
 
@@ -30,6 +35,9 @@
 	let progressInterval: ReturnType<typeof setInterval> | null = null;
 	let markingMatch = $state<number | null>(null);
 	let detections = $state<import('$lib/types').Detection[]>([]);
+	let bellSamples = $state<BellSample[]>([]);
+	let bellStartTicks = $state<number | null>(null);
+	let bellTotalCount = $state<number | null>(null);
 
 	let sortedChapters = $derived(
 		[...chapters].sort((a, b) => a.start_ticks - b.start_ticks)
@@ -40,6 +48,8 @@
 			try {
 				playerInfo = await getPlayerInfo(videoId);
 				chapters = playerInfo.chapters;
+				bellSamples = await getBellSamples(videoId);
+				getBellSampleCount().then(r => { bellTotalCount = r.total; }).catch(() => {});
 			} catch (e) {
 				error = 'Failed to load player info';
 			} finally {
@@ -131,6 +141,15 @@
 			case 'M':
 				videoEl.muted = !videoEl.muted;
 				break;
+			case 'b':
+			case 'B':
+				handleBellMark();
+				break;
+			case 'Escape':
+				if (bellStartTicks !== null) {
+					bellStartTicks = null;
+				}
+				break;
 		}
 	}
 
@@ -216,6 +235,48 @@
 		chapters = await getChapters(playerInfo.video.id);
 	}
 
+	async function handleBellMark() {
+		if (!videoEl) return;
+		const nowTicks = Math.floor(videoEl.currentTime * 10_000_000);
+		if (bellStartTicks === null) {
+			bellStartTicks = nowTicks;
+		} else {
+			const start = bellStartTicks;
+			const end = nowTicks;
+			bellStartTicks = null;
+			if (end <= start) return;
+			try {
+				await createBellSample(videoId, { start_ticks: start, end_ticks: end });
+				await reloadBellSamples();
+			} catch (e) {
+				console.error('Failed to create bell sample:', e);
+			}
+		}
+	}
+
+	async function reloadBellSamples() {
+		bellSamples = await getBellSamples(videoId);
+		getBellSampleCount().then(r => { bellTotalCount = r.total; }).catch(() => {});
+	}
+
+	async function handleDeleteBellSample(sampleId: number) {
+		try {
+			await deleteBellSample(videoId, sampleId);
+			await reloadBellSamples();
+		} catch (e) {
+			console.error('Failed to delete bell sample:', e);
+		}
+	}
+
+	async function handleUpdateBellLabel(sampleId: number, label: string | null) {
+		try {
+			await updateBellSample(videoId, sampleId, { label });
+			await reloadBellSamples();
+		} catch (e) {
+			console.error('Failed to update bell sample:', e);
+		}
+	}
+
 	function handleBeforeUnload() {
 		if (playerInfo && videoEl) {
 			reportPlaybackStopped(videoId, {
@@ -268,15 +329,22 @@
 							onpause={() => { isPlaying = false; }}
 						></video>
 
-						<PlayerControls
-							{videoEl}
-							{currentTime}
-							{duration}
-							{isPlaying}
-							{chapters}
-							trickplay={playerInfo.trickplay}
-							{detections}
-						/>
+						{#if bellStartTicks !== null}
+						<div class="absolute top-3 left-3 z-20 flex items-center gap-2 bg-black/80 rounded-lg px-3 py-2">
+							<span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+							<span class="text-xs text-white">Bell recording... (<kbd class="font-mono">B</kbd> to stop, <kbd class="font-mono">Esc</kbd> to cancel)</span>
+						</div>
+					{/if}
+
+					<PlayerControls
+						{videoEl}
+						{currentTime}
+						{duration}
+						{isPlaying}
+						{chapters}
+						trickplay={playerInfo.trickplay}
+						{detections}
+					/>
 					</div>
 				</div>
 
@@ -330,6 +398,62 @@
 						</div>
 					</div>
 				{/if}
+
+				<!-- Bell Samples -->
+				<div class="mt-4">
+					<div class="flex items-baseline gap-2 mb-2">
+						<h3 class="text-sm font-medium text-titan-text-muted">Bell Samples ({bellSamples.length})</h3>
+						{#if bellTotalCount !== null}
+							<span class="text-xs text-titan-text-muted">{bellTotalCount} total across all videos</span>
+						{/if}
+					</div>
+					{#if bellSamples.length === 0}
+						<p class="text-xs text-titan-text-muted">Press <kbd class="font-mono bg-titan-surface px-1 rounded">B</kbd> to mark a bell start, <kbd class="font-mono bg-titan-surface px-1 rounded">B</kbd> again to mark end.</p>
+					{:else}
+						<div class="space-y-1">
+							{#each bellSamples as sample}
+								<div class="flex items-center gap-2 bg-titan-surface rounded px-3 py-2 group">
+									<button
+										onclick={() => { videoEl.currentTime = sample.start_ticks / 10_000_000; }}
+										class="text-xs font-mono text-titan-accent hover:underline shrink-0"
+									>
+										{formatTicks(sample.start_ticks)}
+									</button>
+									<span class="text-xs text-titan-text-muted">-</span>
+									<button
+										onclick={() => { videoEl.currentTime = sample.end_ticks / 10_000_000; }}
+										class="text-xs font-mono text-titan-accent hover:underline shrink-0"
+									>
+										{formatTicks(sample.end_ticks)}
+									</button>
+									<span class="text-xs text-titan-text-muted shrink-0">
+										{((sample.end_ticks - sample.start_ticks) / 10_000_000).toFixed(1)}s
+									</span>
+									<select
+										value={sample.label ?? ''}
+										onchange={(e) => {
+											const val = (e.target as HTMLSelectElement).value || null;
+											handleUpdateBellLabel(sample.id, val);
+										}}
+										class="text-xs bg-titan-bg border border-titan-surface rounded px-1 py-0.5 text-titan-text-muted flex-1 min-w-0"
+									>
+										<option value="">(none)</option>
+										<option value="match_start">match_start</option>
+										<option value="match_end">match_end</option>
+										<option value="timekeeper">timekeeper</option>
+									</select>
+									<button
+										onclick={() => handleDeleteBellSample(sample.id)}
+										class="text-xs text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 shrink-0"
+										title="Delete sample"
+									>
+										&times;
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			</div>
 
 			<!-- Right: Match card sidebar -->

@@ -152,7 +152,7 @@ export function getSyncStatus(): Promise<SyncStatus> {
 }
 
 // Browse
-import type { Promotion, Event, EventDetail, EventComment, VideoItem, MatchCandidate, MatchStatus, PlayerInfo, Chapter, WrestlerProfile, WrestlerMatchHistory, SearchResults, AnalysisStatus, AnalysisResults } from '$lib/types';
+import type { Promotion, Event, EventDetail, EventComment, VideoItem, MatchCandidate, MatchStatus, PlayerInfo, Chapter, BellSample, WrestlerProfile, WrestlerMatchHistory, SearchResults, AnalysisStatus, AnalysisResults } from '$lib/types';
 
 export function getPromotions(): Promise<Promotion[]> {
 	return request('/browse/promotions');
@@ -264,6 +264,35 @@ export function deleteChapter(videoId: number, chapterId: number): Promise<void>
 	return request(`/player/${videoId}/chapters/${chapterId}`, {
 		method: 'DELETE'
 	});
+}
+
+// Bell Samples
+export function getBellSamples(videoId: number): Promise<BellSample[]> {
+	return request(`/player/${videoId}/bell-samples`);
+}
+
+export function createBellSample(videoId: number, data: { start_ticks: number; end_ticks: number; label?: string | null }): Promise<BellSample> {
+	return request(`/player/${videoId}/bell-samples`, {
+		method: 'POST',
+		body: JSON.stringify(data)
+	});
+}
+
+export function updateBellSample(videoId: number, sampleId: number, data: { label: string | null }): Promise<BellSample> {
+	return request(`/player/${videoId}/bell-samples/${sampleId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(data)
+	});
+}
+
+export function deleteBellSample(videoId: number, sampleId: number): Promise<void> {
+	return request(`/player/${videoId}/bell-samples/${sampleId}`, {
+		method: 'DELETE'
+	});
+}
+
+export function getBellSampleCount(): Promise<{ total: number }> {
+	return request('/player/bell-samples/count');
 }
 
 // Playback reporting
