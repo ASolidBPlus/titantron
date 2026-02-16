@@ -141,15 +141,6 @@
 			case 'M':
 				videoEl.muted = !videoEl.muted;
 				break;
-			case 'b':
-			case 'B':
-				handleBellMark();
-				break;
-			case 'Escape':
-				if (bellStartTicks !== null) {
-					bellStartTicks = null;
-				}
-				break;
 		}
 	}
 
@@ -329,14 +320,7 @@
 							onpause={() => { isPlaying = false; }}
 						></video>
 
-						{#if bellStartTicks !== null}
-						<div class="absolute top-3 left-3 z-20 flex items-center gap-2 bg-black/80 rounded-lg px-3 py-2">
-							<span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
-							<span class="text-xs text-white">Bell recording... (<kbd class="font-mono">B</kbd> to stop, <kbd class="font-mono">Esc</kbd> to cancel)</span>
-						</div>
-					{/if}
-
-					<PlayerControls
+						<PlayerControls
 						{videoEl}
 						{currentTime}
 						{duration}
@@ -401,14 +385,36 @@
 
 				<!-- Bell Samples -->
 				<div class="mt-4">
-					<div class="flex items-baseline gap-2 mb-2">
+					<div class="flex items-center gap-3 mb-2">
 						<h3 class="text-sm font-medium text-titan-text-muted">Bell Samples ({bellSamples.length})</h3>
 						{#if bellTotalCount !== null}
 							<span class="text-xs text-titan-text-muted">{bellTotalCount} total across all videos</span>
 						{/if}
+						<button
+							onclick={handleBellMark}
+							class="ml-auto text-xs px-3 py-1.5 rounded font-medium {bellStartTicks !== null
+								? 'bg-red-500 text-white animate-pulse'
+								: 'bg-titan-accent text-white hover:opacity-90'}"
+						>
+							{#if bellStartTicks !== null}
+								Stop ({formatTicks(Math.floor(currentTime * 10_000_000))})
+							{:else}
+								Mark Bell
+							{/if}
+						</button>
+						{#if bellStartTicks !== null}
+							<button
+								onclick={() => { bellStartTicks = null; }}
+								class="text-xs px-2 py-1.5 rounded text-titan-text-muted hover:text-white hover:bg-titan-surface"
+							>
+								Cancel
+							</button>
+						{/if}
 					</div>
-					{#if bellSamples.length === 0}
-						<p class="text-xs text-titan-text-muted">Press <kbd class="font-mono bg-titan-surface px-1 rounded">B</kbd> to mark a bell start, <kbd class="font-mono bg-titan-surface px-1 rounded">B</kbd> again to mark end.</p>
+					{#if bellSamples.length === 0 && bellStartTicks === null}
+						<p class="text-xs text-titan-text-muted">Click "Mark Bell" to start, then click "Stop" to save the sample.</p>
+					{:else if bellSamples.length === 0}
+						<p class="text-xs text-titan-text-muted">Recording from {formatTicks(bellStartTicks!)}... click "Stop" when the bell ends.</p>
 					{:else}
 						<div class="space-y-1">
 							{#each bellSamples as sample}
