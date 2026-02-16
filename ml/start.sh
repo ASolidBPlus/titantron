@@ -38,4 +38,8 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
+# PANNs downloads model to ~/panns_data/ — symlink into cache volume
+mkdir -p /cache/panns_data
+ln -sfn /cache/panns_data /root/panns_data
+
 exec uvicorn app.main:app --host 0.0.0.0 --port 8769 --timeout-keep-alive 300 --h11-max-incomplete-event-size 0

@@ -41,11 +41,24 @@ MUSIC_CLASSES = {
     "Theme music",
 }
 
-# Bell classes — discrete events, only emitted above threshold.
+# Bell/ring classes — anything that could be a wrestling ring bell.
+# All detected as type "bell" in the output.
 BELL_CLASSES = {
-    "Bell": 0.30,
-    "Cowbell": 0.35,
-    "Chime": 0.40,
+    "Bell": 0.20,
+    "Church bell": 0.25,
+    "Jingle bell": 0.25,
+    "Bicycle bell": 0.25,
+    "Cowbell": 0.20,
+    "Tubular bells": 0.25,
+    "Chime": 0.25,
+    "Wind chime": 0.30,
+    "Gong": 0.20,
+    "Cymbal": 0.30,
+    "Ding-dong": 0.20,
+    "Ding": 0.20,
+    "Clang": 0.20,
+    "Doorbell": 0.25,
+    "Telephone bell ringing": 0.25,
 }
 
 DEFAULT_WINDOW_SECS = 30
