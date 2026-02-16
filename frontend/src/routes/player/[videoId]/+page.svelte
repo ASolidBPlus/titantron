@@ -332,14 +332,41 @@
 					</div>
 				</div>
 
-				<!-- Video title + event link -->
-				<div class="mt-3">
-					<h1 class="text-lg font-semibold">{playerInfo.video.title}</h1>
-					{#if playerInfo.event}
-						<a href="/browse/event/{playerInfo.event.cagematch_event_id}" class="text-sm text-titan-text-muted hover:text-titan-accent">
-							{playerInfo.event.name} &middot; {playerInfo.event.date}
-						</a>
-					{/if}
+				<!-- Video title + event link + bell sample controls -->
+				<div class="mt-3 flex items-start justify-between gap-4">
+					<div>
+						<h1 class="text-lg font-semibold">{playerInfo.video.title}</h1>
+						{#if playerInfo.event}
+							<a href="/browse/event/{playerInfo.event.cagematch_event_id}" class="text-sm text-titan-text-muted hover:text-titan-accent">
+								{playerInfo.event.name} &middot; {playerInfo.event.date}
+							</a>
+						{/if}
+					</div>
+					<div class="flex items-center gap-2 shrink-0">
+						<button
+							onclick={handleBellMark}
+							class="text-xs px-3 py-1.5 rounded font-medium {bellStartTicks !== null
+								? 'bg-red-500 text-white animate-pulse'
+								: 'bg-titan-surface text-titan-text-muted hover:text-white'}"
+						>
+							{#if bellStartTicks !== null}
+								Stop Bell ({formatTicks(Math.floor(currentTime * 10_000_000))})
+							{:else}
+								Mark Bell
+							{/if}
+						</button>
+						{#if bellStartTicks !== null}
+							<button
+								onclick={() => { bellStartTicks = null; }}
+								class="text-xs px-2 py-1.5 rounded text-titan-text-muted hover:text-white hover:bg-titan-surface"
+							>
+								Cancel
+							</button>
+						{/if}
+						{#if bellTotalCount !== null}
+							<span class="text-xs text-titan-text-muted">{bellTotalCount} bells</span>
+						{/if}
+					</div>
 				</div>
 
 				<!-- Detection Filmstrip -->
@@ -383,39 +410,10 @@
 					</div>
 				{/if}
 
-				<!-- Bell Samples -->
-				<div class="mt-4">
-					<div class="flex items-center gap-3 mb-2">
-						<h3 class="text-sm font-medium text-titan-text-muted">Bell Samples ({bellSamples.length})</h3>
-						{#if bellTotalCount !== null}
-							<span class="text-xs text-titan-text-muted">{bellTotalCount} total across all videos</span>
-						{/if}
-						<button
-							onclick={handleBellMark}
-							class="ml-auto text-xs px-3 py-1.5 rounded font-medium {bellStartTicks !== null
-								? 'bg-red-500 text-white animate-pulse'
-								: 'bg-titan-accent text-white hover:opacity-90'}"
-						>
-							{#if bellStartTicks !== null}
-								Stop ({formatTicks(Math.floor(currentTime * 10_000_000))})
-							{:else}
-								Mark Bell
-							{/if}
-						</button>
-						{#if bellStartTicks !== null}
-							<button
-								onclick={() => { bellStartTicks = null; }}
-								class="text-xs px-2 py-1.5 rounded text-titan-text-muted hover:text-white hover:bg-titan-surface"
-							>
-								Cancel
-							</button>
-						{/if}
-					</div>
-					{#if bellSamples.length === 0 && bellStartTicks === null}
-						<p class="text-xs text-titan-text-muted">Click "Mark Bell" to start, then click "Stop" to save the sample.</p>
-					{:else if bellSamples.length === 0}
-						<p class="text-xs text-titan-text-muted">Recording from {formatTicks(bellStartTicks!)}... click "Stop" when the bell ends.</p>
-					{:else}
+				<!-- Bell Samples list -->
+				{#if bellSamples.length > 0}
+					<div class="mt-4">
+						<h3 class="text-sm font-medium text-titan-text-muted mb-2">Bell Samples ({bellSamples.length})</h3>
 						<div class="space-y-1">
 							{#each bellSamples as sample}
 								<div class="flex items-center gap-2 bg-titan-surface rounded px-3 py-2 group">
@@ -458,8 +456,8 @@
 								</div>
 							{/each}
 						</div>
-					{/if}
-				</div>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Right: Match card sidebar -->
