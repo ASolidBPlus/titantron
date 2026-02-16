@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Callable
 
@@ -12,9 +11,6 @@ from app.config import get_setting
 
 logger = logging.getLogger(__name__)
 
-TICKS = 10_000_000
-ML_SAMPLE_RATE = 32000  # PANNs expects 32kHz
-AUDIO_EXTRACT_TIMEOUT = 300  # 5 min for ffmpeg extraction
 ML_CLASSIFY_TIMEOUT = 1800  # 30 min for ML inference (long videos)
 
 
@@ -51,40 +47,30 @@ async def check_ml_available(url: str | None = None) -> dict:
 
 
 async def classify_audio(
-    local_path: str,
-    duration_ticks: int,
+    ml_file_path: str,
     on_progress: Callable[..., None] | None = None,
 ) -> dict:
-    """Extract audio via ffmpeg and send to ML container for classification.
+    """Send file path to ML container for audio extraction + classification.
 
+    The ML container handles ffmpeg extraction locally.
     Returns dict with keys: spectrum, detections, window_secs.
     """
     url = _get_ml_url()
     if not url:
         raise RuntimeError("ML service URL not configured")
 
-    duration_secs = duration_ticks / TICKS if duration_ticks else 0
-
-    # Step 1: Extract audio via ffmpeg
-    if on_progress:
-        on_progress(1, 3, "Extracting audio from video...")
-
-    logger.info(f"Extracting audio from {local_path} (PCM float32 32kHz mono)")
-    pcm_data = await _extract_audio(local_path)
-    pcm_mb = len(pcm_data) / 1024 / 1024
-
-    # Step 2: Send to ML container
-    if on_progress:
-        on_progress(2, 3, f"Sending audio to ML service ({pcm_mb:.0f}MB)...")
-
-    logger.info(f"Audio extracted: {pcm_mb:.1f}MB, sending to ML service")
     window_secs = get_setting("ml_window_secs") or 30
+
+    # Step 1: Send to ML container (it handles extraction + inference)
+    if on_progress:
+        on_progress(1, 2, "Running audio extraction + ML classification...")
+
+    logger.info(f"Sending classify request to ML service: {ml_file_path}")
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{url}/classify?window_secs={window_secs}",
-            data=pcm_data,
-            headers={"Content-Type": "application/octet-stream"},
+            f"{url}/classify",
+            json={"file_path": ml_file_path, "window_secs": window_secs},
             timeout=aiohttp.ClientTimeout(total=ML_CLASSIFY_TIMEOUT, sock_read=ML_CLASSIFY_TIMEOUT, sock_connect=30),
         ) as resp:
             if resp.status != 200:
@@ -92,46 +78,12 @@ async def classify_audio(
                 raise RuntimeError(f"ML classification failed: HTTP {resp.status} — {text}")
             result = await resp.json()
 
-    # Step 3: Done
+    # Step 2: Done
     spectrum = result.get("spectrum", [])
     detections = result.get("detections", [])
     window_secs = result.get("window_secs", 30)
     if on_progress:
-        on_progress(3, 3, f"ML classification complete: {len(spectrum)} windows, {len(detections)} bell detections")
+        on_progress(2, 2, f"ML classification complete: {len(spectrum)} windows, {len(detections)} bell detections")
 
     logger.info(f"ML classification returned {len(spectrum)} spectrum windows, {len(detections)} bell detections")
     return {"spectrum": spectrum, "detections": detections, "window_secs": window_secs}
-
-
-async def _extract_audio(local_path: str) -> bytes:
-    """Extract audio from video file as raw PCM float32 mono 32kHz."""
-    cmd = [
-        "ffmpeg",
-        "-i", local_path,
-        "-vn",                  # no video
-        "-ac", "1",             # mono
-        "-ar", str(ML_SAMPLE_RATE),  # 32kHz
-        "-f", "f32le",          # raw PCM float32 little-endian
-        "-acodec", "pcm_f32le",
-        "pipe:1",               # output to stdout
-    ]
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(),
-        timeout=AUDIO_EXTRACT_TIMEOUT,
-    )
-
-    if proc.returncode != 0:
-        err_msg = stderr.decode(errors="replace")[-500:]
-        raise RuntimeError(f"ffmpeg audio extraction failed (exit {proc.returncode}): {err_msg}")
-
-    if len(stdout) < 4:
-        raise RuntimeError("ffmpeg produced no audio data")
-
-    return stdout

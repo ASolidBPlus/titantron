@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # Path mapping (Jellyfin path prefix → local path prefix)
     path_map_from: str = ""
     path_map_to: str = ""
+    ml_path_map_to: str = ""  # ML container mount point (audio analysis)
 
     # ML audio detection (opt-in, requires titantron-ml sidecar)
     ml_audio_enabled: bool = False
@@ -58,7 +59,7 @@ settings = Settings()
 _runtime_overrides: dict = {}
 
 # Keys that can be changed via the admin settings UI
-CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst", "path_map_from", "path_map_to", "ml_audio_enabled", "ml_service_url", "ml_window_secs"}
+CONFIGURABLE_KEYS = {"jellyfin_public_url", "admin_password", "scrape_rate_limit", "scrape_burst", "path_map_from", "path_map_to", "ml_path_map_to", "ml_audio_enabled", "ml_service_url", "ml_window_secs"}
 
 
 def _settings_path() -> Path:

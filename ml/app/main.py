@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import sys
 import time
 
 import numpy as np
 import torch
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +30,7 @@ _model_loaded = False
 
 SAMPLE_RATE = 32000  # PANNs expects 32kHz
 TICKS = 10_000_000
+AUDIO_EXTRACT_TIMEOUT = 300  # 5 min for ffmpeg extraction
 
 # AudioSet music classes — used for continuous spectrum (no threshold filtering).
 MUSIC_CLASSES = {
@@ -64,6 +68,48 @@ def _get_model():
     return _model
 
 
+async def _extract_audio(file_path: str) -> bytes:
+    """Extract audio from video file as raw PCM float32 mono 32kHz."""
+    cmd = [
+        "ffmpeg",
+        "-i", file_path,
+        "-vn",                  # no video
+        "-ac", "1",             # mono
+        "-ar", str(SAMPLE_RATE),  # 32kHz
+        "-f", "f32le",          # raw PCM float32 little-endian
+        "-acodec", "pcm_f32le",
+        "pipe:1",               # output to stdout
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stdout, stderr = await asyncio.wait_for(
+        proc.communicate(),
+        timeout=AUDIO_EXTRACT_TIMEOUT,
+    )
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[-500:]
+        raise RuntimeError(f"ffmpeg audio extraction failed (exit {proc.returncode}): {err_msg}")
+
+    if len(stdout) < 4:
+        raise RuntimeError("ffmpeg produced no audio data")
+
+    return stdout
+
+
+# ── Request models ──────────────────────────────────────────────────────────
+
+
+class ClassifyRequest(BaseModel):
+    file_path: str
+    window_secs: int = DEFAULT_WINDOW_SECS
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -73,30 +119,31 @@ async def health():
 
 
 @app.post("/classify")
-async def classify(request: Request, window_secs: int = DEFAULT_WINDOW_SECS):
-    """Classify music events from raw PCM audio data.
+async def classify(body: ClassifyRequest):
+    """Classify music events from a video file.
 
-    Expects raw PCM float32, mono, 32kHz as the request body.
-    Query params:
-        window_secs: analysis window size (default 30, use 2-10 for GPU)
+    Extracts audio via ffmpeg, then runs PANNs CNN14 inference.
     Returns JSON with spectrum (every window) + bell detections.
     """
-    # Stream the body in chunks to handle large files (1GB+)
-    chunks = []
-    async for chunk in request.stream():
-        chunks.append(chunk)
-    body = b"".join(chunks)
+    file_path = body.file_path
+    window_secs = max(2, min(body.window_secs, 60))
 
-    if len(body) < 4:
-        return {"spectrum": [], "detections": [], "window_secs": window_secs}
+    # Validate file exists
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=422, detail=f"File not found: {file_path}")
 
-    window_secs = max(2, min(window_secs, 60))
+    # Extract audio via ffmpeg
+    logger.info(f"Extracting audio from {file_path} (PCM float32 {SAMPLE_RATE}Hz mono)")
+    try:
+        pcm_data = await _extract_audio(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Audio extraction failed: {e}")
 
-    audio = np.frombuffer(body, dtype=np.float32)
+    audio = np.frombuffer(pcm_data, dtype=np.float32)
     total_samples = len(audio)
     total_secs = total_samples / SAMPLE_RATE
 
-    logger.info(f"Classifying {total_secs:.1f}s of audio ({len(body) / 1024 / 1024:.1f}MB, {window_secs}s windows)")
+    logger.info(f"Classifying {total_secs:.1f}s of audio ({len(pcm_data) / 1024 / 1024:.1f}MB, {window_secs}s windows)")
 
     model = _get_model()
 

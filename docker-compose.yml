@@ -5,11 +5,11 @@ services:
       - "8765:8765"
     volumes:
       - titantron-config:/config
-      # Mount video libraries for audio analysis (bell/music detection):
+      # Mount video libraries for visual analysis (scene detection):
       # - /path/to/media:/media:ro
-      # Then in Admin > Setup, set:
-      #   Jellyfin Path: /data/videos  (Jellyfin's internal path)
-      #   Local Path:    /media         (container mount point)
+      # Then in Admin > Settings > Path Mapping, set:
+      #   Jellyfin Path Prefix: /data/videos  (Jellyfin's internal path)
+      #   Backend Mount:        /media         (this container's mount point)
     env_file:
       - .env
     environment:
@@ -26,6 +26,10 @@ services:
   #   image: ghcr.io/asolidbplus/titantron-ml:latest
   #   volumes:
   #     - ml-cache:/cache  # persists installed deps + downloaded model
+  #     # Mount video files for audio extraction (same source as titantron):
+  #     # - /path/to/media:/media:ro
+  #     # Then in Admin > Settings > Path Mapping, set:
+  #     #   ML Container Mount: /media  (this container's mount point)
   #   restart: unless-stopped
   #   # Uncomment for GPU support (requires nvidia-container-toolkit):
   #   # deploy:

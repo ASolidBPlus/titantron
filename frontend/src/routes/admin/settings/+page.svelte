@@ -51,6 +51,7 @@
 	// Global path mapping
 	let pathMapFrom = $state('');
 	let pathMapTo = $state('');
+	let mlPathMapTo = $state('');
 
 	// File browser
 	let showBrowser = $state(false);
@@ -219,6 +220,7 @@
 				scrapeBurst = settings.scrape_burst;
 				pathMapFrom = settings.path_map_from;
 				pathMapTo = settings.path_map_to;
+				mlPathMapTo = settings.ml_path_map_to || '';
 				mlAudioEnabled = !!settings.ml_audio_enabled;
 				mlServiceUrl = settings.ml_service_url || 'http://titantron-ml:8769';
 				mlWindowSecs = settings.ml_window_secs || 30;
@@ -350,6 +352,7 @@
 				scrape_burst: scrapeBurst,
 				path_map_from: pathMapFrom,
 				path_map_to: pathMapTo,
+				ml_path_map_to: mlPathMapTo,
 				ml_audio_enabled: mlAudioEnabled,
 				ml_service_url: mlServiceUrl,
 				ml_window_secs: mlWindowSecs,
@@ -694,21 +697,26 @@
 			<div class="p-4">
 				<h2 class="text-lg font-semibold mb-1">Path Mapping</h2>
 				<p class="text-xs text-titan-text-muted mb-3">
-					Maps Jellyfin file paths to local container paths for audio analysis. If Jellyfin stores files at <code>/data/wrestling/show.mkv</code> and your container mounts that as <code>/media/wrestling/show.mkv</code>, set the mapping below.
+					Maps Jellyfin file paths to container mount points. Both the backend and ML containers need access to video files but may mount them at different paths.
 				</p>
+
+				<!-- Jellyfin path prefix (shared source) -->
+				<div class="max-w-lg mb-4">
+					<label for="path-map-from" class="block text-xs text-titan-text-muted mb-1">Jellyfin path prefix</label>
+					<input
+						id="path-map-from"
+						type="text"
+						bind:value={pathMapFrom}
+						placeholder="/data"
+						class="w-full px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+					/>
+					<p class="text-xs text-titan-text-muted mt-1">The path prefix Jellyfin uses internally for video files.</p>
+				</div>
+
 				<div class="grid grid-cols-2 gap-3 max-w-lg">
+					<!-- Backend mount (visual analysis) -->
 					<div>
-						<label for="path-map-from" class="block text-xs text-titan-text-muted mb-1">Jellyfin path</label>
-						<input
-							id="path-map-from"
-							type="text"
-							bind:value={pathMapFrom}
-							placeholder="/data"
-							class="w-full px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
-						/>
-					</div>
-					<div>
-						<label for="path-map-to" class="block text-xs text-titan-text-muted mb-1">Local path</label>
+						<label for="path-map-to" class="block text-xs text-titan-text-muted mb-1">Backend mount</label>
 						<div class="flex gap-2">
 							<input
 								id="path-map-to"
@@ -726,12 +734,33 @@
 								Browse
 							</button>
 						</div>
+						<p class="text-xs text-titan-text-muted mt-1">For visual analysis (scene detection).</p>
+					</div>
+
+					<!-- ML container mount (audio analysis) -->
+					<div>
+						<label for="ml-path-map-to" class="block text-xs text-titan-text-muted mb-1">ML container mount</label>
+						<input
+							id="ml-path-map-to"
+							type="text"
+							bind:value={mlPathMapTo}
+							placeholder="/media"
+							class="w-full px-3 py-2 bg-titan-bg border border-titan-border rounded text-sm focus:outline-none focus:border-titan-accent"
+						/>
+						<p class="text-xs text-titan-text-muted mt-1">For audio analysis (ML service).</p>
 					</div>
 				</div>
-				{#if pathMapFrom && pathMapTo}
-					<p class="text-xs text-titan-text-muted mt-2">
-						<span class="font-mono">{pathMapFrom}/...</span> &rarr; <span class="font-mono">{pathMapTo}/...</span>
-					</p>
+
+				<!-- Preview -->
+				{#if pathMapFrom && (pathMapTo || mlPathMapTo)}
+					<div class="mt-3 text-xs text-titan-text-muted space-y-1">
+						{#if pathMapTo}
+							<p>Backend: <span class="font-mono">{pathMapFrom}/...</span> &rarr; <span class="font-mono">{pathMapTo}/...</span></p>
+						{/if}
+						{#if mlPathMapTo}
+							<p>ML: <span class="font-mono">{pathMapFrom}/...</span> &rarr; <span class="font-mono">{mlPathMapTo}/...</span></p>
+						{/if}
+					</div>
 				{/if}
 			</div>
 		</section>

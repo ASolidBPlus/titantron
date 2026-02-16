@@ -331,6 +331,7 @@ export interface AppSettings {
 	scrape_burst: number;
 	path_map_from: string;
 	path_map_to: string;
+	ml_path_map_to: string;
 	ml_audio_enabled: boolean;
 	ml_service_url: string;
 	ml_window_secs: number;
@@ -343,6 +344,7 @@ export interface AppSettingsUpdate {
 	scrape_burst?: number;
 	path_map_from?: string;
 	path_map_to?: string;
+	ml_path_map_to?: string;
 	ml_audio_enabled?: boolean;
 	ml_service_url?: string;
 	ml_window_secs?: number;

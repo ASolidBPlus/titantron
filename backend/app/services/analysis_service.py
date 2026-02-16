@@ -145,11 +145,11 @@ async def _run_analysis_pipeline(
         await db.commit()
 
         # --- Resolve local file path (shared by visual + audio) ---
+        from app.config import get_setting
         local_path = None
+        path_from = get_setting("path_map_from")
+        path_to = get_setting("path_map_to")
         if video.path:
-            from app.config import get_setting
-            path_from = get_setting("path_map_from")
-            path_to = get_setting("path_map_to")
             print(f"[ANALYSIS] Path mapping: from={path_from!r} to={path_to!r} video.path={video.path!r}", flush=True)
             if path_from and path_to and video.path.startswith(path_from):
                 relative = video.path[len(path_from):].lstrip("/")
@@ -238,17 +238,26 @@ async def _run_analysis_pipeline(
 
             ml_enabled = get_setting("ml_audio_enabled")
 
+            # Resolve ML-local file path (separate from backend's local_path)
+            ml_path = None
+            if video.path:
+                ml_path_to = get_setting("ml_path_map_to")
+                if path_from and ml_path_to and video.path.startswith(path_from):
+                    relative = video.path[len(path_from):].lstrip("/")
+                    ml_path = os.path.join(ml_path_to, relative)
+                    print(f"[ANALYSIS] ML path resolved: {ml_path}", flush=True)
+
             if not ml_enabled:
                 audio_skip_reason = "ml_audio_disabled"
                 logger.info(f"ML audio disabled, skipping audio for video {video_id}")
                 _analysis_progress[video_id]["message"] = (
                     "Audio analysis skipped (ML audio not enabled)"
                 )
-            elif not local_path:
-                audio_skip_reason = "no_path_mapping"
-                logger.info(f"No local path mapping for video {video_id}, skipping audio")
+            elif not ml_path:
+                audio_skip_reason = "no_ml_path_mapping"
+                logger.info(f"No ML path mapping for video {video_id}, skipping audio")
                 _analysis_progress[video_id]["message"] = (
-                    "Audio analysis skipped (no path mapping configured)"
+                    "Audio analysis skipped (ML path mapping not configured)"
                 )
             else:
                 # Check ML service availability
@@ -273,8 +282,7 @@ async def _run_analysis_pipeline(
                             _analysis_progress[video_id].update(update)
 
                         audio_result = await classify_audio(
-                            local_path,
-                            video.duration_ticks or 0,
+                            ml_path,
                             on_progress=on_audio_progress,
                         )
                         audio_detections = audio_result["detections"]

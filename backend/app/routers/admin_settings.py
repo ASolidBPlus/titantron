@@ -15,6 +15,7 @@ class SettingsUpdate(BaseModel):
     scrape_burst: int | None = None
     path_map_from: str | None = None
     path_map_to: str | None = None
+    ml_path_map_to: str | None = None
     ml_audio_enabled: bool | None = None
     ml_service_url: str | None = None
     ml_window_secs: int | None = None
@@ -30,6 +31,7 @@ async def get_app_settings():
         "scrape_burst": get_setting("scrape_burst"),
         "path_map_from": get_setting("path_map_from"),
         "path_map_to": get_setting("path_map_to"),
+        "ml_path_map_to": get_setting("ml_path_map_to"),
         "ml_audio_enabled": get_setting("ml_audio_enabled"),
         "ml_service_url": get_setting("ml_service_url"),
         "ml_window_secs": get_setting("ml_window_secs"),
@@ -55,6 +57,8 @@ async def update_app_settings(body: SettingsUpdate):
         updates["path_map_from"] = body.path_map_from
     if body.path_map_to is not None:
         updates["path_map_to"] = body.path_map_to
+    if body.ml_path_map_to is not None:
+        updates["ml_path_map_to"] = body.ml_path_map_to
     if body.ml_audio_enabled is not None:
         updates["ml_audio_enabled"] = body.ml_audio_enabled
     if body.ml_service_url is not None:
